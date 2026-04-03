@@ -1,4 +1,4 @@
-"""Parse Qme survey rows into a flat list of records (→ rawdata.csv)."""
+"""Parse Qme survey rows into flat records, then encode answers to numeric codes."""
 
 from __future__ import annotations
 
@@ -6,102 +6,82 @@ from collections import defaultdict
 from typing import Any
 
 
-# ──────────────────────────────────────────────
-# Answer serialisers  (row question → str cell)
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Step 1 – raw-text serialisers (row → str)
+# ─────────────────────────────────────────────
 
-def _fmt_singlechoice(answer: Any) -> str:
+def _fmt_text(answer: Any) -> str:
     return str(answer).strip() if answer else ""
 
 
 def _fmt_multiplechoice(answer: Any) -> str:
-    """Returns semicolon-separated answer_names."""
+    """Semicolon-separated answer_names."""
     if not isinstance(answer, list):
-        return str(answer).strip() if answer else ""
+        return _fmt_text(answer)
     return ";".join(a["answer_name"] for a in answer if a.get("answer_name"))
 
 
 def _fmt_ranking(answer: Any) -> str:
-    """Returns ordered semicolon-separated answer_names (rank1 first)."""
+    """Ordered semicolon-separated answer_names (rank-1 first)."""
     if not isinstance(answer, list):
-        return str(answer).strip() if answer else ""
+        return _fmt_text(answer)
     return ";".join(a["answer_name"] for a in answer if a.get("answer_name"))
 
 
 def _fmt_matrix(answer: Any) -> str:
-    """Returns  row1:col1|row2:col2  string."""
+    """row1:col1|row2:col2"""
     if not isinstance(answer, list):
-        return str(answer).strip() if answer else ""
-    parts = []
-    for item in answer:
-        row = item.get("vertical_answer", "")
-        col = item.get("horizontal_answer", "")
-        parts.append(f"{row}:{col}")
-    return "|".join(parts)
+        return _fmt_text(answer)
+    return "|".join(
+        f"{i.get('vertical_answer','')}:{i.get('horizontal_answer','')}"
+        for i in answer
+    )
 
 
 def _fmt_multiplenumber(answer: Any) -> str:
-    """Returns  answer1:num1|answer2:num2  string."""
+    """answer1:num1|answer2:num2"""
     if not isinstance(answer, list):
-        return str(answer).strip() if answer else ""
-    parts = []
-    for item in answer:
-        name = item.get("answer_name", "")
-        num  = item.get("number", "")
-        parts.append(f"{name}:{num}")
-    return "|".join(parts)
+        return _fmt_text(answer)
+    return "|".join(
+        f"{i.get('answer_name','')}:{i.get('number','')}"
+        for i in answer
+    )
 
 
-def _fmt_photo(q: dict) -> str:
-    """Returns semicolon-separated image URLs."""
-    images = q.get("images", [])
-    return ";".join(images) if images else ""
+def _fmt_photo(rq: dict) -> str:
+    return ";".join(rq.get("images", []))
 
 
-_SCALAR_TYPES = {
+_SCALAR_ROW_TYPES = {
     "user-name", "user-phone", "freetext", "singlechoice",
     "date", "area", "singlenumber", "reward",
 }
 
-_ROW_TYPE_TO_FMT = {
-    "singlechoice":  _fmt_singlechoice,
-    "multiplechoice": _fmt_multiplechoice,
-    "ranking":       _fmt_ranking,
-    "matrix":        _fmt_matrix,
-    "multiplenumber": _fmt_multiplenumber,
+_ROW_TYPE_FORMATTERS = {
+    "multiplechoice":  _fmt_multiplechoice,
+    "ranking":         _fmt_ranking,
+    "matrix":          _fmt_matrix,
+    "multiplenumber":  _fmt_multiplenumber,
 }
 
 
-def _format_answer(rq: dict) -> str:
-    """Serialise a single row-question dict to a CSV-safe string."""
-    rtype  = rq.get("type", "")
-    answer = rq.get("answer", "")
-
+def _raw_answer(rq: dict) -> str:
+    rtype = rq.get("type", "")
     if rtype == "photo":
         return _fmt_photo(rq)
-
-    if rtype in _SCALAR_TYPES:
-        return _fmt_singlechoice(answer)
-
-    fmt = _ROW_TYPE_TO_FMT.get(rtype)
+    if rtype in _SCALAR_ROW_TYPES:
+        return _fmt_text(rq.get("answer", ""))
+    fmt = _ROW_TYPE_FORMATTERS.get(rtype)
     if fmt:
-        return fmt(answer)
-
-    # Fallback: stringify whatever we have
-    return str(answer).strip() if answer else ""
+        return fmt(rq.get("answer", ""))
+    return _fmt_text(rq.get("answer", ""))
 
 
-# ──────────────────────────────────────────────
-# Question-map  (english_question → [position])
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Question map  (english_question → [position])
+# ─────────────────────────────────────────────
 
 def build_question_map(definition_questions: list[dict]) -> dict[str, list[int]]:
-    """Build lookup: english_question → ordered list of positions.
-
-    Most questions have a unique english text.  When duplicates exist
-    (same text reused for different questions), we keep them in definition
-    order so we can match greedily.
-    """
     mapping: dict[str, list[int]] = defaultdict(list)
     for q in definition_questions:
         eng = (q.get("english_question") or "").strip()
@@ -110,17 +90,15 @@ def build_question_map(definition_questions: list[dict]) -> dict[str, list[int]]
     return dict(mapping)
 
 
-# ──────────────────────────────────────────────
-# Row parser
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Step 1 – parse rows → raw-text records
+# ─────────────────────────────────────────────
 
-_ROW_META_KEYS = ("task_id", "date_time", "Key_in_date",
-                  "lastmodified_date", "profile_status")
+_ROW_META = ("task_id", "date_time", "Key_in_date",
+             "lastmodified_date", "profile_status")
 
 
 def _parse_single_row(row: dict, question_map: dict[str, list[int]]) -> dict:
-    """Convert one raw Qme row into a flat {column: value} record."""
-
     record: dict[str, Any] = {
         "task_id":           row.get("task_id", ""),
         "date_time":         row.get("date_time", ""),
@@ -128,106 +106,124 @@ def _parse_single_row(row: dict, question_map: dict[str, list[int]]) -> dict:
         "lastmodified_date": row.get("lastmodified_date", ""),
         "profile_status":    row.get("profile_status", ""),
     }
-
-    # Track how many times we've matched each english_question (for duplicates)
     used: dict[str, int] = defaultdict(int)
-
     for rq in row.get("questions", []):
         eng_q     = (rq.get("question") or "").strip()
         positions = question_map.get(eng_q)
         if not positions:
             continue
-
         idx = used[eng_q]
         if idx >= len(positions):
-            continue  # more answers than definition slots — skip extras
-
-        pos             = positions[idx]
-        used[eng_q]    += 1
-        label           = f"q{pos}"
-        record[label]   = _format_answer(rq)
-
+            continue
+        pos           = positions[idx]
+        used[eng_q]  += 1
+        record[f"q{pos}"] = _raw_answer(rq)
     return record
 
-
-# ──────────────────────────────────────────────
-# Public API
-# ──────────────────────────────────────────────
 
 def parse_rows(
     rows_pages: list[dict],
     definition: dict,
+    profile_status: list[str] | None = None,
 ) -> list[dict]:
-    """Parse all fetched row pages into a list of flat records.
+    """Return list of raw-text records (one per respondent).
 
     Parameters
     ----------
-    rows_pages : list[dict]
-        One or more raw ``get_survey_rows`` responses (each page is a
-        separate dict).  The ``rows`` list from every page is combined.
-    definition : dict
-        Raw ``get_survey_definition`` response — used to build the
-        question-position map.
-
-    Returns
-    -------
-    list[dict]
-        One flat dict per respondent.  Keys: task_id, date_time,
-        Key_in_date, lastmodified_date, profile_status, q1 … qN.
+    profile_status
+        Whitelist of statuses to keep. Defaults to ``["approved"]``.
+        Pass an empty list ``[]`` to include all statuses.
     """
-    def_questions = definition.get("questions", [])
-    question_map  = build_question_map(def_questions)
+    if profile_status is None:
+        profile_status = ["approved"]
 
-    # Collect all instruction positions so we can skip them in the output
-    instruction_positions = {
-        q["position"]
-        for q in def_questions
-        if q.get("type") in {31}
-    }
-
+    allowed = {s.lower() for s in profile_status} if profile_status else None
+    question_map = build_question_map(definition.get("questions", []))
     records = []
     for page in rows_pages:
         for row in page.get("rows", []):
+            if allowed and row.get("profile_status", "").lower() not in allowed:
+                continue
             records.append(_parse_single_row(row, question_map))
-
     return records
 
 
-def records_to_dataframe(records: list[dict], definition: dict):
-    """Convert flat records to a pandas DataFrame with ordered columns.
+# ─────────────────────────────────────────────
+# Step 2 – encode text → numeric codes
+# ─────────────────────────────────────────────
 
-    Column order: task_id, date_time, Key_in_date, lastmodified_date,
-    profile_status, q1, q2, …, qN  (instruction columns excluded).
+from surveyflow.steps.ingestion.metadata_parser import CODEABLE_TYPES
 
-    Parameters
-    ----------
-    records : list[dict]
-    definition : dict
 
-    Returns
-    -------
-    pandas.DataFrame
+def encode_records(
+    raw_records: list[dict],
+    encoding_map: dict[str, dict[str, int]],
+    metadata: dict,
+) -> list[dict]:
+    """Replace text answers with numeric codes where applicable.
+
+    - singlechoice       → int code            (e.g. 1)
+    - multiplechoice     → semicolon codes      (e.g. "1;3;5")
+    - ranking            → ordered codes        (e.g. "2;1;3")
+    - everything else    → unchanged text
+    """
+    questions = metadata["questions"]
+    encoded = []
+
+    for record in raw_records:
+        new_rec: dict[str, Any] = {}
+        for col, value in record.items():
+            q = questions.get(col)
+            if q is None or col in _ROW_META or not value:
+                new_rec[col] = value
+                continue
+
+            atype = q["answer_type"]
+            if atype not in CODEABLE_TYPES:
+                new_rec[col] = value
+                continue
+
+            label_to_code = encoding_map.get(col, {})
+
+            if atype == "singlechoice":
+                new_rec[col] = label_to_code.get(str(value).strip(), "")
+            else:  # multiplechoice / ranking
+                parts = [v.strip() for v in str(value).split(";") if v.strip()]
+                codes = [str(label_to_code[p]) for p in parts if p in label_to_code]
+                new_rec[col] = ";".join(codes)
+
+        encoded.append(new_rec)
+
+    return encoded
+
+
+# ─────────────────────────────────────────────
+# Step 3 – records → DataFrame
+# ─────────────────────────────────────────────
+
+# answer_types excluded from rawdata.csv
+EXCLUDED_ANSWER_TYPES = {"audio", "user-name", "user-phone", "instruction", "reward"}
+
+
+def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):
+    """Ordered DataFrame: meta cols + q1…qN.
+    Only includes q-columns that exist in metadata (single source of truth).
     """
     import pandas as pd
 
-    def_questions = definition.get("questions", [])
+    questions_meta = metadata.get("questions", {})
 
-    # Build ordered column list (meta + question labels, skip instructions)
     meta_cols = ["task_id", "date_time", "Key_in_date",
                  "lastmodified_date", "profile_status"]
     q_cols = [
         f"q{q['position']}"
-        for q in def_questions
-        if q.get("type") not in {31}
+        for q in definition.get("questions", [])
+        if f"q{q['position']}" in questions_meta
     ]
-
     all_cols = meta_cols + q_cols
 
     df = pd.DataFrame(records)
-
-    # Ensure all expected columns exist (fill missing with "")
     for col in all_cols:
         if col not in df.columns:
             df[col] = ""
-
     return df[all_cols].fillna("")

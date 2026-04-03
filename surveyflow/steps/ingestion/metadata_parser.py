@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-# Question types that carry no respondent answer (instructions / section headers)
 _INSTRUCTION_TYPES = {31}
 
-# Map definition question type → human-readable answer_type string
 _TYPE_LABEL: dict[int, str] = {
     1:    "freetext",
     2:    "singlechoice",
     3:    "multiplechoice",
     4:    "matrix",
     6:    "ranking",
-    8:    "singlechoice",      # piped single choice
-    9:    "multiplechoice",    # unaided / piped MA
+    8:    "singlechoice",
+    9:    "multiplechoice",
     31:   "instruction",
     40:   "audio",
     1106: "user-name",
@@ -21,12 +19,24 @@ _TYPE_LABEL: dict[int, str] = {
     1109: "area",
 }
 
-# input_type overrides for type=1 (freetext)
+_TYPE_LABEL: dict[int, str] = {
+    1:    "freetext",
+    2:    "singlechoice",
+    3:    "multiplechoice",
+    4:    "matrix",
+    6:    "ranking",
+    1109: "area",
+}
+
+
 _INPUT_TYPE_LABEL: dict[int, str] = {
     3:   "singlenumber",
     68:  "reward",
     100: "multiplenumber",
 }
+
+# answer_types that support numeric coding
+CODEABLE_TYPES = {"singlechoice", "multiplechoice", "ranking"}
 
 
 def _resolve_answer_type(q_type: int, input_type: int) -> str:
@@ -36,103 +46,104 @@ def _resolve_answer_type(q_type: int, input_type: int) -> str:
 
 
 def parse_metadata(definition: dict) -> dict:
-    """Convert a raw ``get_survey_definition`` response to metadata dict.
+    """Convert get_survey_definition response → metadata dict.
 
-    Parameters
-    ----------
-    definition : dict
-        Raw JSON response from the Qme ``get_survey_definition`` tool.
+    Excluded answer_types (audio, user-name, user-phone, instruction, reward)
+    are omitted — kept in sync with rawdata.csv.
 
-    Returns
-    -------
-    dict
-        Metadata dict.  Saved to ``metadata.json`` by the IO layer.
-        ``questions[*].values`` starts empty and is populated later by
-        :func:`enrich_metadata_values` once all rows have been parsed.
+    Structure:
+    {
+      "survey_id": ...,
+      "questions": {
+        "q7": {
+          "position": 7,
+          "question_id": ...,
+          "question": "...(VN)...",
+          "english_question": "...",
+          "answer_type": "singlechoice",
+          "mandatory": true,
+          "status": 1,
+          "values": {}     ← populated by enrich_metadata_values()
+        },
+        ...
+      }
+    }
     """
+    from surveyflow.steps.ingestion.data_parser import EXCLUDED_ANSWER_TYPES
+
     survey = definition["survey"]
 
-    questions = []
+    questions: dict[str, dict] = {}
     for q in definition.get("questions", []):
-        q_type    = q["type"]
-        inp_type  = q.get("input_type", 0)
-        is_instr  = q_type in _INSTRUCTION_TYPES
+        q_type   = q["type"]
+        inp_type = q.get("input_type", 0)
+        atype    = _resolve_answer_type(q_type, inp_type)
 
-        questions.append({
+        if atype in EXCLUDED_ANSWER_TYPES:
+            continue
+
+        label = f"q{q['position']}"
+        questions[label] = {
             "position":         q["position"],
-            "label":            f"q{q['position']}",
             "question_id":      q["question_id"],
             "question":         q["question"],
             "english_question": q["english_question"],
-            "type":             q_type,
-            "input_type":       inp_type,
-            "answer_type":      _resolve_answer_type(q_type, inp_type),
-            "is_instruction":   is_instr,
+            "answer_type":      atype,
             "mandatory":        q.get("mandatory", False),
             "status":           q.get("status", 1),
-            # populated by enrich_metadata_values()
-            "values":           {},
-        })
+            "values":           {},   # {code_str: label_text}
+        }
 
     return {
-        "survey_id":      survey["survey_id"],
-        "title":          survey.get("title", ""),
-        "english_title":  survey.get("english_title", ""),
-        "status":         survey.get("status", ""),
-        "start_date":     survey.get("start_date", ""),
-        "end_date":       survey.get("end_date", ""),
-        "question_count": len(questions),
-        "questions":      questions,
+        "survey_id":     survey["survey_id"],
+        "title":         survey.get("title", ""),
+        "english_title": survey.get("english_title", ""),
+        "status":        survey.get("status", ""),
+        "start_date":    survey.get("start_date", ""),
+        "end_date":      survey.get("end_date", ""),
+        "questions":     questions,
     }
 
 
-def enrich_metadata_values(metadata: dict, rawdata_records: list[dict]) -> dict:
-    """Populate ``values`` for each question from observed row answers.
+def build_encoding_map(
+    raw_text_records: list[dict],
+    metadata: dict,
+) -> dict[str, dict[str, int]]:
+    """Build {label: {answer_text: code}} mapping from observed row data.
 
-    For singlechoice / multiplechoice / ranking questions the ``values``
-    dict maps each answer label to an auto-assigned integer code
-    (1-based, in order of first appearance).
-
-    Parameters
-    ----------
-    metadata : dict
-        Metadata dict produced by :func:`parse_metadata`.
-    rawdata_records : list[dict]
-        List of flat dicts produced by ``data_parser.parse_rows``,
-        one per respondent row (before DataFrame conversion).
-
-    Returns
-    -------
-    dict
-        The same ``metadata`` dict, mutated in place, then returned.
+    Codes are assigned 1-based in order of first appearance.
+    Only CODEABLE_TYPES (singlechoice, multiplechoice, ranking) are encoded.
     """
-    # Build label → question meta quick-lookup
-    label_to_meta = {q["label"]: q for q in metadata["questions"]}
-
-    # Collect ordered unique values per label
+    questions = metadata["questions"]
     seen: dict[str, list[str]] = {}
 
-    for record in rawdata_records:
+    for record in raw_text_records:
         for label, raw_value in record.items():
-            if label not in label_to_meta or not raw_value:
+            q = questions.get(label)
+            if q is None or not raw_value:
                 continue
-            q = label_to_meta[label]
-            atype = q["answer_type"]
+            if q["answer_type"] not in CODEABLE_TYPES:
+                continue
 
-            if atype in ("singlechoice",):
-                vals = [str(raw_value).strip()]
-            elif atype in ("multiplechoice", "ranking"):
-                vals = [v.strip() for v in str(raw_value).split(";") if v.strip()]
-            else:
-                continue  # freetext / number / photo / etc. — no code mapping
-
+            parts = [v.strip() for v in str(raw_value).split(";") if v.strip()]
             bucket = seen.setdefault(label, [])
-            for v in vals:
-                if v not in bucket:
-                    bucket.append(v)
+            for p in parts:
+                if p not in bucket:
+                    bucket.append(p)
 
-    # Write back as {answer_label: code}
-    for label, values in seen.items():
-        label_to_meta[label]["values"] = {v: i + 1 for i, v in enumerate(values)}
+    return {
+        label: {text: (i + 1) for i, text in enumerate(texts)}
+        for label, texts in seen.items()
+    }
 
+
+def enrich_metadata_values(
+    metadata: dict,
+    encoding_map: dict[str, dict[str, int]],
+) -> dict:
+    """Populate values = {code_str: label_text} for each question."""
+    for label, text_to_code in encoding_map.items():
+        q = metadata["questions"].get(label)
+        if q:
+            q["values"] = {str(code): text for text, code in text_to_code.items()}
     return metadata

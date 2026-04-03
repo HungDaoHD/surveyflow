@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class IngestionStep(Step):
     """Converts raw Qme API responses to rawdata.csv and metadata.json.
-    
+
     Expected context keys (inputs)
     --------------------------------
     ``definition``

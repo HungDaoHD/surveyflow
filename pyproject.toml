@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "surveyflow"
 version = "0.1.0"
-description = "Survey data pipeline: fetch from Qme/FieldCheck, export rawdata.csv + metadata.json, generate datatable.xlsx"
+description = "Survey data pipeline: parse survey definitions and responses into rawdata.csv and metadata.json"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

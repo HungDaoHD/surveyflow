@@ -103,12 +103,21 @@ def _compute_sig_marks(
     alpha95 = 0.05 if 95 in levels else None
     alpha90 = 0.10 if 90 in levels else None
 
-    # Group non-total column indices by group_label
+    # Group non-total column indices for pairwise comparison.
+    # When a column has mid_label (e.g. cross-banner "Male"/"Female"), group by
+    # (group_label, mid_label) so Male columns compare among themselves and
+    # Female columns compare among themselves — NOT across mid-level groups.
     groups: dict[str, list[int]] = {}
     for i, bc in enumerate(banner_cols):
         if bc.is_total:
             continue
-        groups.setdefault(bc.group_label, []).append(i)
+        if bc.sub_mid_label:
+            key = f"{bc.group_label}|{bc.sub_mid_label}|{bc.mid_label}"   # group = deepest parent cell
+        elif bc.mid_label:
+            key = f"{bc.group_label}|{bc.mid_label}"
+        else:
+            key = bc.group_label
+        groups.setdefault(key, []).append(i)
 
     marks: dict[int, list[str]] = {i: [] for i in range(len(banner_cols))}
 

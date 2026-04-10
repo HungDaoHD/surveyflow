@@ -17,16 +17,16 @@ from surveyflow.steps.table.table_generator import StubBlock, StubRow, compute_t
 logger = logging.getLogger(__name__)
 
 # ── Fills ──────────────────────────────────────────────────────────────────────
-_F_NAVY    = PatternFill("solid", fgColor="1F4E79")
-_F_BLUE    = PatternFill("solid", fgColor="2E75B6")
-_F_LBLUE   = PatternFill("solid", fgColor="BDD7EE")
-_F_STAT    = PatternFill("solid", fgColor="EBF3FB")
-_F_SIG_HDR = PatternFill("solid", fgColor="E2EFDA")   # light green for sig col header
+_F_GROUP   = PatternFill("solid", fgColor="1F4E79")   # navy  — group row
+_F_MID     = PatternFill("solid", fgColor="2E75B6")   # blue  — mid / sub_mid rows
+_F_DETAIL  = PatternFill("solid", fgColor="BDD7EE")   # light blue — detail row
+_F_STAT    = PatternFill("solid", fgColor="EBF3FB")   # very light blue — stat rows
+_F_SIG_HDR = PatternFill("solid", fgColor="E2EFDA")   # light green — sig col header
 
 # ── Fonts ──────────────────────────────────────────────────────────────────────
 _WHITE_BOLD = Font(color="FFFFFF", bold=True, size=10)
 _BOLD       = Font(bold=True, size=10)
-_BLUE_BOLD  = Font(color="1F4E79", bold=True, size=10)
+_DARK_BOLD  = Font(color="1F4E79", bold=True, size=10)
 _RED        = Font(color="FF0000", size=10)
 _NORMAL     = Font(size=10)
 _GREY       = Font(color="595959", size=9)
@@ -36,14 +36,10 @@ _C = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _L = Alignment(horizontal="left",   vertical="center", wrap_text=True)
 _R = Alignment(horizontal="right",  vertical="center")
 
-# ── Borders ────────────────────────────────────────────────────────────────────
-# Three-level hierarchy:
-#   _S_THIN  — standard data-cell lines (thin, soft blue-grey)
-#   _S_MED   — horizontal accent under header rows (medium, blue)
-#   _S_THICK — vertical group separators (thick, navy)
-_S_THIN  = Side(style="thin",   color="9DC3E6")   # soft blue for cell lines
-_S_MED   = Side(style="medium", color="2E75B6")   # blue for bottom accents
-_S_THICK = Side(style="thick",  color="1F4E79")   # navy for group separators
+# ── Borders (black) ────────────────────────────────────────────────────────────
+_S_THIN  = Side(style="thin",   color="000000")
+_S_MED   = Side(style="medium", color="000000")
+_S_THICK = Side(style="thick",  color="000000")
 
 def _brd(thick_left: bool = False, thick_bottom: bool = False) -> Border:
     """Build a cell border with optional thick left (group sep) and thick bottom (section sep)."""
@@ -174,61 +170,183 @@ def _write_sheet(
         thick = idx > 0   # thick left border between groups (not on the very first)
         _merge(ws, 5, c1, 5, c2)
         _set(ws, 5, c1, label,
-             font=_WHITE_BOLD, fill=_F_NAVY, align=_C, border=_brd(thick))
+             font=_WHITE_BOLD, fill=_F_GROUP, align=_C, border=_brd(thick))
     ws.row_dimensions[5].height = 20
 
-    # ── Row 6: banner SUBGROUP labels ────────────────────────────────
-    # thick_bottom when show_sig=False (row 6 is the last banner row → sep from data)
-    sub_thick_bot = not show_sig
+    # ── Dynamic row numbering ────────────────────────────────────────────
+    # has_sub_mid → 4-row header: group(5)/sub_mid(6)/mid(7)/detail(8)/letter(9)
+    # has_mid only → 3-row header: group(5)/mid(6)/detail(7)/letter(8)
+    # plain       → 2-row header: group(5)/detail(6)/letter(7)
+    has_sub_mid = any(bc.sub_mid_label for bc in banner_cols)
+    has_mid     = any(bc.mid_label     for bc in banner_cols)
+
+    if has_sub_mid:
+        SUB_MID_ROW = 6
+        MID_ROW     = 7
+        DETAIL_ROW  = 8
+        LETTER_ROW  = 9
+    elif has_mid:
+        MID_ROW    = 6
+        DETAIL_ROW = 7
+        LETTER_ROW = 8
+    else:
+        DETAIL_ROW = 6
+        LETTER_ROW = 7
+
+    DATA_START = (LETTER_ROW + 1) if show_sig else (DETAIL_ROW + 1)
+
+    # ── Row 6 (sub_mid row, only when has_sub_mid) ───────────────────────
+    # • 3-level cols (sub_mid_label):    show sub_mid_label, merge by (group, sub_mid)
+    # • 2-level cols (mid_label only):   show mid_label,     merge by (group, mid)
+    # • regular cols (no mid, no sub):   empty fill,         merge across full group
+    if has_sub_mid:
+        i = 0
+        while i < len(slots):
+            slot  = slots[i]
+            bc    = slot["banner"]
+            c1    = DATA_COL + i
+            thick = slot["first_in_group"] and i > 0
+            if bc.sub_mid_label:
+                j = i
+                while (j < len(slots)
+                       and slots[j]["banner"].group_label   == bc.group_label
+                       and slots[j]["banner"].sub_mid_label == bc.sub_mid_label):
+                    j += 1
+                _merge(ws, SUB_MID_ROW, c1, SUB_MID_ROW, DATA_COL + j - 1)
+                _set(ws, SUB_MID_ROW, c1, bc.sub_mid_label,
+                     font=_WHITE_BOLD, fill=_F_GROUP, align=_C, border=_brd(thick))
+            elif bc.mid_label:
+                # 2-level cross-banner: show mid_label in this outermost row
+                j = i
+                while (j < len(slots)
+                       and slots[j]["banner"].group_label == bc.group_label
+                       and slots[j]["banner"].mid_label   == bc.mid_label
+                       and not slots[j]["banner"].sub_mid_label):
+                    j += 1
+                _merge(ws, SUB_MID_ROW, c1, SUB_MID_ROW, DATA_COL + j - 1)
+                _set(ws, SUB_MID_ROW, c1, bc.mid_label,
+                     font=_WHITE_BOLD, fill=_F_MID, align=_C, border=_brd(thick))
+            else:
+                # Regular column: empty, merge across same-group non-cross cols
+                j = i
+                while (j < len(slots)
+                       and slots[j]["banner"].group_label == bc.group_label
+                       and not slots[j]["banner"].sub_mid_label
+                       and not slots[j]["banner"].mid_label):
+                    j += 1
+                _merge(ws, SUB_MID_ROW, c1, SUB_MID_ROW, DATA_COL + j - 1)
+                _set(ws, SUB_MID_ROW, c1, fill=_F_MID, border=_brd(thick))
+            i = j
+        ws.row_dimensions[SUB_MID_ROW].height = 18
+
+    # ── Mid row (row 6 when has_mid-only, row 7 when has_sub_mid) ────────
+    # has_sub_mid sheet:
+    #   • 3-level cols: show mid_label, merge by (group, sub_mid, mid)
+    #   • 2-level cols: empty (label already shown in sub_mid row), merge per mid group
+    #   • regular cols: empty, merge across full group
+    # has_mid-only sheet:
+    #   • cross-banner cols: show mid_label, merge by (group, mid)
+    #   • regular cols: empty, merge across full group
+    if has_sub_mid or has_mid:
+        i = 0
+        while i < len(slots):
+            slot  = slots[i]
+            bc    = slot["banner"]
+            c1    = DATA_COL + i
+            thick = slot["first_in_group"] and i > 0
+
+            if has_sub_mid:
+                if bc.sub_mid_label and bc.mid_label:
+                    # 3-level: show mid_label
+                    j = i
+                    while (j < len(slots)
+                           and slots[j]["banner"].group_label   == bc.group_label
+                           and slots[j]["banner"].sub_mid_label == bc.sub_mid_label
+                           and slots[j]["banner"].mid_label     == bc.mid_label):
+                        j += 1
+                    _merge(ws, MID_ROW, c1, MID_ROW, DATA_COL + j - 1)
+                    _set(ws, MID_ROW, c1, bc.mid_label,
+                         font=_WHITE_BOLD, fill=_F_MID, align=_C, border=_brd(thick))
+                elif bc.mid_label:
+                    # 2-level in 3-level sheet: empty per mid group
+                    j = i
+                    while (j < len(slots)
+                           and slots[j]["banner"].group_label == bc.group_label
+                           and slots[j]["banner"].mid_label   == bc.mid_label
+                           and not slots[j]["banner"].sub_mid_label):
+                        j += 1
+                    _merge(ws, MID_ROW, c1, MID_ROW, DATA_COL + j - 1)
+                    _set(ws, MID_ROW, c1, fill=_F_MID, border=_brd(thick))
+                else:
+                    # Regular: empty, merge across full group
+                    j = i
+                    while (j < len(slots)
+                           and slots[j]["banner"].group_label == bc.group_label
+                           and not slots[j]["banner"].sub_mid_label
+                           and not slots[j]["banner"].mid_label):
+                        j += 1
+                    _merge(ws, MID_ROW, c1, MID_ROW, DATA_COL + j - 1)
+                    _set(ws, MID_ROW, c1, fill=_F_MID, border=_brd(thick))
+            else:
+                # has_mid only
+                if bc.mid_label:
+                    j = i
+                    while (j < len(slots)
+                           and slots[j]["banner"].group_label == bc.group_label
+                           and slots[j]["banner"].mid_label   == bc.mid_label):
+                        j += 1
+                    _merge(ws, MID_ROW, c1, MID_ROW, DATA_COL + j - 1)
+                    _set(ws, MID_ROW, c1, bc.mid_label,
+                         font=_WHITE_BOLD, fill=_F_MID, align=_C, border=_brd(thick))
+                else:
+                    # Regular: empty, merge across full group
+                    j = i
+                    while (j < len(slots)
+                           and slots[j]["banner"].group_label == bc.group_label
+                           and not slots[j]["banner"].mid_label):
+                        j += 1
+                    _merge(ws, MID_ROW, c1, MID_ROW, DATA_COL + j - 1)
+                    _set(ws, MID_ROW, c1, fill=_F_MID, border=_brd(thick))
+            i = j
+        ws.row_dimensions[MID_ROW].height = 18
+
+    # ── Detail row: ALL columns show subgroup_label ───────────────────────
+    detail_thick_bot = not show_sig
     i = 0
     while i < len(slots):
-        slot = slots[i]
-        bc   = slot["banner"]
-        c1   = DATA_COL + i
-        # find all consecutive slots that belong to the same BannerColumn object
-        j = i
+        slot  = slots[i]
+        bc    = slot["banner"]
+        c1    = DATA_COL + i
+        j     = i
         while j < len(slots) and slots[j]["banner"] is bc:
             j += 1
-        c2    = DATA_COL + j - 1
-        thick = slot["first_in_group"] and i > 0   # thick between groups, not on leftmost
-        _merge(ws, 6, c1, 6, c2)
-        _set(ws, 6, c1, bc.subgroup_label,
-             font=_WHITE_BOLD, fill=_F_BLUE, align=_C,
-             border=_brd(thick, thick_bottom=sub_thick_bot))
+        thick = slot["first_in_group"] and i > 0
+        _merge(ws, DETAIL_ROW, c1, DETAIL_ROW, DATA_COL + j - 1)
+        _set(ws, DETAIL_ROW, c1, bc.subgroup_label,
+             font=_DARK_BOLD, fill=_F_DETAIL, align=_C,
+             border=_brd(thick, thick_bottom=detail_thick_bot))
         i = j
-    ws.row_dimensions[6].height = 18
+    ws.row_dimensions[DETAIL_ROW].height = 18
 
-    # ── Row 7: column-type labels (sig letter | "Sig") ───────────────
-    # Only render when show_sig=True — letters are meaningless without sig marks
-    # thick_bottom here because row 7 is always the last banner row when present
+    # ── Letter row ────────────────────────────────────────────────────────
     if show_sig:
         for i, slot in enumerate(slots):
             col   = DATA_COL + i
             thick = slot["first_in_group"] and i > 0
             if slot["kind"] == "data":
-                _set(ws, 7, col, slot["banner"].letter,
-                     font=_BOLD, fill=_F_LBLUE, align=_C,
+                _set(ws, LETTER_ROW, col, slot["banner"].letter,
+                     font=_BOLD, fill=_F_DETAIL, align=_C,
                      border=_brd(thick, thick_bottom=True))
             else:
-                _set(ws, 7, col, "Sig",
-                     font=_GREY, fill=_F_SIG_HDR, align=_C,
+                _set(ws, LETTER_ROW, col, "Sig",
+                     font=_GREY, fill=_F_STAT, align=_C,
                      border=_brd(False, thick_bottom=True))
-        ws.row_dimensions[7].height = 16
+        ws.row_dimensions[LETTER_ROW].height = 16
     else:
-        ws.row_dimensions[7].height = 0   # hide letter row entirely
+        ws.row_dimensions[LETTER_ROW].height = 0
 
     # ── Stub rows ────────────────────────────────────────────────────
-    # Layout (no cell merging):
-    #
-    #   Question header row  →  col A = code  |  col B = label  |  col C = "Base"
-    #                           data cols = base counts (white bold on dark blue)
-    #
-    #   Data rows            →  col A/B = empty  |  col C = answer label
-    #                           data cols = percentages / counts / stat values
-    #
-    # Banner-group separation: thick left border on the first column of each group.
-
-    cur = 8
+    cur = DATA_START
     for block in blocks:
         if not block.rows:
             continue
@@ -240,13 +358,13 @@ def _write_sheet(
         # ── Question header row (doubles as Base row) ────────────────
         # thick_bottom separates this header from its answer-option rows
         _set(ws, cur, 1, block.question_code,
-             font=_WHITE_BOLD, fill=_F_BLUE, align=_C,
+             font=_WHITE_BOLD, fill=_F_MID, align=_C,
              border=_brd(thick_bottom=True))
         _set(ws, cur, 2, block.question_label,
-             font=_WHITE_BOLD, fill=_F_BLUE, align=_L,
+             font=_WHITE_BOLD, fill=_F_MID, align=_L,
              border=_brd(thick_bottom=True))
         _set(ws, cur, 3, "Base" if base_row else "",
-             font=_WHITE_BOLD, fill=_F_BLUE, align=_L,
+             font=_WHITE_BOLD, fill=_F_MID, align=_L,
              border=_brd(thick_bottom=True))
 
         for i, slot in enumerate(slots):
@@ -254,13 +372,13 @@ def _write_sheet(
             thick = slot["first_in_group"] and i > 0
 
             if slot["kind"] == "sig" or base_row is None:
-                _set(ws, cur, col, fill=_F_BLUE, border=_brd(thick, thick_bottom=True))
+                _set(ws, cur, col, fill=_F_MID, border=_brd(thick, thick_bottom=True))
                 continue
 
             bc_idx = slot["bc_index"]
             val    = int(base_row.counts.get(bc_idx, 0))
             _set(ws, cur, col, val,
-                 font=_WHITE_BOLD, fill=_F_BLUE,
+                 font=_WHITE_BOLD, fill=_F_MID,
                  align=_R, border=_brd(thick, thick_bottom=True), num_fmt="0")
 
         ws.row_dimensions[cur].height = 17
@@ -279,7 +397,7 @@ def _write_sheet(
 
             # col C — answer/stat label
             _set(ws, r, 3, stub_row.label,
-                 font=_BLUE_BOLD if is_stat else _NORMAL,
+                 font=_DARK_BOLD if is_stat else _NORMAL,
                  fill=_F_STAT if is_stat else None,
                  align=_L, border=_brd(thick_bottom=is_last_row))
 
@@ -308,7 +426,7 @@ def _write_sheet(
                 if cell_content == "count":
                     val = int(raw) if raw is not None else 0
                     fmt = "0"
-                    fnt = _BLUE_BOLD if is_stat else _NORMAL
+                    fnt = _DARK_BOLD if is_stat else _NORMAL
                 elif stub_row.row_type == "percent":
                     val = float(raw) if raw is not None else 0.0
                     fmt = "0%"
@@ -316,7 +434,7 @@ def _write_sheet(
                 else:
                     val = float(raw) if raw is not None else 0.0
                     fmt = "0%" if stub_row.row_type in ("t2b", "b2b") else "0.00"
-                    fnt = _BLUE_BOLD
+                    fnt = _DARK_BOLD
 
                 _set(ws, r, col, val,
                      font=fnt,
@@ -329,7 +447,7 @@ def _write_sheet(
             cur += 1
 
     # freeze panes
-    ws.freeze_panes = ws.cell(row=8, column=DATA_COL)
+    ws.freeze_panes = ws.cell(row=DATA_START, column=DATA_COL)
 
 
 # ── Step ───────────────────────────────────────────────────────────────────────

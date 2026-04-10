@@ -1,7 +1,7 @@
 """Build banner column definitions from datatable config."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pandas as pd
 
 
@@ -17,11 +17,30 @@ def _letter(i: int) -> str:
 
 @dataclass
 class BannerColumn:
-    group_label: str      # e.g. "Gender"  — used to group sig test pairs
-    subgroup_label: str   # e.g. "Male"
-    letter: str           # A, B, C … resets to A at each new group
-    mask: pd.Series       # boolean mask into the rawdata DataFrame
-    is_total: bool = False  # True → excluded from sig test
+    group_label:    str        # e.g. "Gender x Age x Occupation" — sig test grouping key
+    subgroup_label: str        # innermost label  e.g. "Working" / "Male" / "<30"
+    letter:         str        # A, B, C … resets at outermost mid-level boundary
+    mask:           pd.Series
+    is_total:       bool = False   # True → excluded from sig test
+    mid_label:      str  = ""      # 2nd-level sub-header  e.g. "<30" / "Male"
+    sub_mid_label:  str  = ""      # 1st-level sub-header  e.g. "Male" (for 3-level cross)
+    #
+    # Header display rules
+    # ─────────────────────────────────────────────────────────────────
+    # 1-level  (no mid, no sub_mid):
+    #   row 6 = subgroup_label
+    #
+    # 2-level  (mid only):
+    #   row 6 = mid_label  (merged across same group+mid)
+    #   row 7 = subgroup_label
+    #
+    # 3-level  (sub_mid + mid):
+    #   row 6 = sub_mid_label  (merged across same group+sub_mid)
+    #   row 7 = mid_label      (merged across same group+sub_mid+mid)
+    #   row 8 = subgroup_label
+    #
+    # For sig-test grouping, columns are compared within the same
+    # (group_label, sub_mid_label, mid_label) bucket.
 
 
 def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
@@ -33,22 +52,34 @@ def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
 
         # ── Total ──────────────────────────────────────────────────────
         # Detect Total: no "groups" key AND no "question" key.
-        # (Multi-condition cross-banners have "groups" but no top-level "question"
-        # — they must NOT be treated as Total.)
+        # Cross-banners have "groups" but no top-level "question" — NOT Total.
         if "groups" not in entry and "question" not in entry:
             columns.append(BannerColumn(
                 group_label=group_label,
                 subgroup_label="Total",
-                letter="",                              # no letter for Total
+                letter="",
                 mask=pd.Series(True, index=df.index),
                 is_total=True,
             ))
             continue
 
-        # ── Question-based breakdown ───────────────────────────────────
-        for idx, grp in enumerate(entry.get("groups", [])):
+        # ── Letter index — resets at the outermost mid-level boundary ──
+        # • 3-level (sub_mid_label): reset when sub_mid_label changes
+        # • 2-level (mid_label only): reset when mid_label changes
+        # • Regular (no mid): increments continuously
+        letter_idx = 0
+        prev_outer = None
 
-            # ── Multi-condition group (Gender × Age, etc.) ─────────
+        for grp in entry.get("groups", []):
+            sub_mid = grp.get("subgroup2", "")   # outermost mid-level
+            mid_lbl = grp.get("subgroup",  "")   # inner mid-level (or only mid-level)
+
+            outer = sub_mid if sub_mid else mid_lbl
+            if outer and outer != prev_outer:
+                letter_idx = 0
+                prev_outer = outer
+
+            # ── Build mask ────────────────────────────────────────────
             if "conditions" in grp:
                 mask = pd.Series(True, index=df.index)
                 for cond in grp["conditions"]:
@@ -57,8 +88,6 @@ def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
                         mask = mask & (df[cq] == cond["value"])
                     elif "values" in cond:
                         mask = mask & df[cq].isin(cond["values"])
-
-            # ── Single-question group ──────────────────────────────
             else:
                 q = entry["question"]
                 if "value" in grp:
@@ -71,9 +100,12 @@ def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
             columns.append(BannerColumn(
                 group_label=group_label,
                 subgroup_label=grp["label"],
-                letter=_letter(idx),                   # resets to A each group
+                letter=_letter(letter_idx),
                 mask=mask,
                 is_total=False,
+                mid_label=mid_lbl,
+                sub_mid_label=sub_mid,
             ))
+            letter_idx += 1
 
     return columns

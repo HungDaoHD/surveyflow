@@ -149,23 +149,83 @@ def parse_rows(
 
 
 # ─────────────────────────────────────────────
-# Step 2 – encode text → numeric codes
+# Step 2 – encode answers → numeric codes
 # ─────────────────────────────────────────────
 
 from surveyflow.steps.ingestion.metadata_parser import CODEABLE_TYPES
 
 
+# ── Old-API helpers (used when definition has no `choices`) ───────────────────
+
+def build_encoding_map(
+    raw_records: list[dict],
+    metadata: dict,
+) -> dict[str, dict[str, int]]:
+    """Build {col: {answer_text → 1-based code}} from first-appearance order.
+
+    Only processes questions whose ``values`` dict is still empty (i.e. the
+    definition did not supply ``choices``).
+    """
+    questions = metadata["questions"]
+    seen: dict[str, dict[str, int]] = {}
+
+    for record in raw_records:
+        for col, value in record.items():
+            if not value:
+                continue
+            q = questions.get(col)
+            if q is None or q["answer_type"] not in CODEABLE_TYPES:
+                continue
+            if q.get("values"):          # already populated from definition.choices
+                continue
+            if col not in seen:
+                seen[col] = {}
+            atype = q["answer_type"]
+            if atype == "multiplechoice":
+                for part in str(value).split(";"):
+                    part = part.strip()
+                    if part and part not in seen[col]:
+                        seen[col][part] = len(seen[col]) + 1
+            else:                        # singlechoice / ranking
+                val = str(value).strip()
+                if val and val not in seen[col]:
+                    seen[col][val] = len(seen[col]) + 1
+
+    return seen
+
+
+def enrich_metadata_values(
+    metadata: dict,
+    encoding_map: dict[str, dict[str, int]],
+) -> None:
+    """Fill ``metadata["questions"][col]["values"]`` from encoding_map.
+
+    Result format: ``{code_str: label_text}``  e.g. ``{"1": "Male", "2": "Female"}``
+    """
+    for col, label_to_code in encoding_map.items():
+        q = metadata["questions"].get(col)
+        if q is not None:
+            q["values"] = {str(code): label for label, code in label_to_code.items()}
+
+
+# ── encode_records ────────────────────────────────────────────────────────────
+
 def encode_records(
     raw_records: list[dict],
-    encoding_map: dict[str, dict[str, int]],
     metadata: dict,
+    encoding_map: dict[str, dict[str, int]] | None = None,
 ) -> list[dict]:
-    """Replace text answers with numeric codes where applicable.
+    """Convert answers to numeric codes.
 
-    - singlechoice       → int code            (e.g. 1)
-    - multiplechoice     → semicolon codes      (e.g. "1;3;5")
-    - ranking            → ordered codes        (e.g. "2;1;3")
-    - everything else    → unchanged text
+    New API (encoding_map is None):
+      singlechoice   → int            (API already returns integer code)
+      multiplechoice → "1;3;5"        (API already returns code string)
+      ranking        → "2;1;3"        (same)
+
+    Old API (encoding_map provided):
+      singlechoice   → int code       (looked up from encoding_map)
+      multiplechoice → "1;3;5"        (each text part looked up)
+      ranking        → same
     """
     questions = metadata["questions"]
     encoded = []
@@ -179,18 +239,24 @@ def encode_records(
                 continue
 
             atype = q["answer_type"]
-            if atype not in CODEABLE_TYPES:
+
+            if encoding_map is not None and col in encoding_map:
+                # Old-API path: convert text → code
+                label_to_code = encoding_map[col]
+                if atype == "singlechoice":
+                    new_rec[col] = label_to_code.get(str(value).strip(), "")
+                else:   # multiplechoice / ranking
+                    parts = [v.strip() for v in str(value).split(";") if v.strip()]
+                    codes = [str(label_to_code[p]) for p in parts if p in label_to_code]
+                    new_rec[col] = ";".join(codes)
+            elif atype == "singlechoice":
+                # New-API path: cast to int
+                try:
+                    new_rec[col] = int(value)
+                except (ValueError, TypeError):
+                    new_rec[col] = value
+            else:
                 new_rec[col] = value
-                continue
-
-            label_to_code = encoding_map.get(col, {})
-
-            if atype == "singlechoice":
-                new_rec[col] = label_to_code.get(str(value).strip(), "")
-            else:  # multiplechoice / ranking
-                parts = [v.strip() for v in str(value).split(";") if v.strip()]
-                codes = [str(label_to_code[p]) for p in parts if p in label_to_code]
-                new_rec[col] = ";".join(codes)
 
         encoded.append(new_rec)
 

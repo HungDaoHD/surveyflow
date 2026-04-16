@@ -475,8 +475,20 @@ class TableStep(Step):
 
         sig_config = config.get("significance_test", {"enabled": False})
 
+        # Build lookup maps: q{pos} → df column name (label) and → metadata entry
+        col_map: dict[str, str] = {}
+        q_pos_to_meta: dict[str, dict] = {}
+        for meta in metadata.get("questions", {}).values():
+            pos = meta.get("position")
+            if pos is None:
+                continue
+            key = f"q{pos}"
+            label = meta.get("label") or key
+            col_map[key]        = label
+            q_pos_to_meta[key]  = meta
+
         logger.info("Building banner …")
-        banner_cols = build_banner(config, df)
+        banner_cols = build_banner(config, df, col_map=col_map)
         logger.info("  → %d banner columns", len(banner_cols))
 
         logger.info("Computing table …")
@@ -486,6 +498,8 @@ class TableStep(Step):
             df=df,
             metadata=metadata,
             sig_config=sig_config,
+            col_map=col_map,
+            q_pos_to_meta=q_pos_to_meta,
         )
         logger.info("  → %d stub blocks", len(blocks))
 

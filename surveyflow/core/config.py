@@ -28,9 +28,9 @@ class PipelineConfig:
         When None only rawdata.csv + metadata.json are produced.
     """
 
-    definition:        dict
-    rows_pages:        list[dict]
-    output_dir:        str        = "."
+    definition:       dict
+    rows_pages:       list[dict]
+    output_dir:       str       = "."
     profile_status:    list[str]  = field(default_factory=lambda: ["approved"])
     datatable_config:  Optional[str | dict] = None
     version:           Optional[str] = None

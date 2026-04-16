@@ -43,8 +43,24 @@ class BannerColumn:
     # (group_label, sub_mid_label, mid_label) bucket.
 
 
-def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
-    """Return one BannerColumn per banner subgroup defined in config."""
+def build_banner(
+    config: dict,
+    df: pd.DataFrame,
+    col_map: dict[str, str] | None = None,
+) -> list[BannerColumn]:
+    """Return one BannerColumn per banner subgroup defined in config.
+
+    Parameters
+    ----------
+    col_map
+        Optional mapping from datatable ``question`` references (``"q10"``)
+        to the actual column name in *df* (the question's ``label``).
+        When ``None`` the reference is used as-is.
+    """
+
+    def _resolve(q: str) -> str:
+        return col_map[q] if col_map and q in col_map else q
+
     columns: list[BannerColumn] = []
 
     for entry in config.get("banner", []):
@@ -83,13 +99,13 @@ def build_banner(config: dict, df: pd.DataFrame) -> list[BannerColumn]:
             if "conditions" in grp:
                 mask = pd.Series(True, index=df.index)
                 for cond in grp["conditions"]:
-                    cq = cond["question"]
+                    cq = _resolve(cond["question"])
                     if "value" in cond:
                         mask = mask & (df[cq] == cond["value"])
                     elif "values" in cond:
                         mask = mask & df[cq].isin(cond["values"])
             else:
-                q = entry["question"]
+                q = _resolve(entry["question"])
                 if "value" in grp:
                     mask = df[q] == grp["value"]
                 elif "values" in grp:

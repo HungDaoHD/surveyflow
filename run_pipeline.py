@@ -23,7 +23,7 @@ from surveyflow import Pipeline, PipelineConfig
 
 
 def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
-    """Load definition.json + rows_page_*.json from input_dir."""
+    """Load definition.json + rows_page_*.json (code format only) from input_dir."""
     def_path = input_dir / "definition.json"
     if not def_path.exists():
         raise FileNotFoundError(f"definition.json not found in {input_dir}")
@@ -31,7 +31,11 @@ def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
     with def_path.open(encoding="utf-8") as f:
         definition = json.load(f)
 
-    rows_files = sorted(input_dir.glob("rows_page_*.json"))
+    # Code-format pages (rows_page_1.json, rows_page_2.json, …)
+    rows_files = sorted(
+        p for p in input_dir.glob("rows_page_*.json")
+        if not p.stem.endswith("_text")   # ignore any legacy *_text.json files
+    )
     if not rows_files:
         raise FileNotFoundError(f"No rows_page_*.json found in {input_dir}")
 
@@ -40,7 +44,7 @@ def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
         with p.open(encoding="utf-8") as f:
             rows_pages.append(json.load(f))
 
-    logging.info("Loaded definition + %d row page(s) from %s", len(rows_pages), input_dir)
+    logging.info("Loaded definition + %d code page(s) from %s", len(rows_pages), input_dir)
     return definition, rows_pages
 
 

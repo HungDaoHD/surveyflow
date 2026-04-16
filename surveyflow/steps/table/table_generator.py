@@ -9,7 +9,7 @@ from scipy import stats as _scipy_stats
 
 from surveyflow.steps.table.banner_builder import BannerColumn
 
-CODEABLE_TYPES = {"singlechoice", "multiplechoice", "ranking"}
+CODEABLE_TYPES = {"SA", "MA", "ranking"}
 
 STAT_LABELS: dict[str, str] = {
     "base": "Base",
@@ -47,7 +47,7 @@ class StubBlock:
 
 def _binary_array(sub: pd.DataFrame, col: str, code: str, atype: str) -> np.ndarray:
     """Return float 0/1 array: 1 if respondent selected *code*, else 0."""
-    if atype == "multiplechoice":
+    if atype == "MA":
         return sub[col].apply(
             lambda v: 1.0
             if pd.notna(v) and str(v).strip() != "" and code in str(v).split(";")
@@ -198,31 +198,66 @@ def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _choice_label(choices_i18n: dict, code: str) -> str:
+    """Get display label for a choice code. Prefer 'en', fall back to first language."""
+    entry = choices_i18n.get(str(code), {})
+    if not entry:
+        return str(code)
+    return entry.get("en") or entry.get("vi") or next(iter(entry.values()), str(code))
+
+
 def compute_table(
     stub_configs: list[dict],
     banner_cols: list[BannerColumn],
     df: pd.DataFrame,
     metadata: dict,
     sig_config: dict,
+    col_map: dict[str, str] | None = None,
+    q_pos_to_meta: dict[str, dict] | None = None,
 ) -> list[StubBlock]:
-    questions = metadata.get("questions", {})
+    """Compute cross-tabulation blocks.
+
+    Parameters
+    ----------
+    col_map
+        Maps ``q{pos}`` reference → actual df column name (label).
+    q_pos_to_meta
+        Maps ``q{pos}`` reference → metadata entry dict.
+    """
+
+    def _resolve(q: str) -> str:
+        return col_map[q] if col_map and q in col_map else q
+
+    def _get_meta(q: str) -> dict | None:
+        return q_pos_to_meta.get(q) if q_pos_to_meta else None
+
     blocks: list[StubBlock] = []
     n = len(banner_cols)
 
     for sc in stub_configs:
-        q = sc["question"]
-        if q not in questions or q not in df.columns:
+        q      = sc["question"]
+        q_col  = _resolve(q)            # actual df column name
+        q_meta = _get_meta(q)
+
+        if q_meta is None or q_col not in df.columns:
             continue
 
-        q_meta    = questions[q]
-        atype     = q_meta["answer_type"]
-        values    = q_meta.get("values", {})
-        req_stats = sc.get("stats", ["base", "percent"])
-        q_label   = sc.get("label", q_meta.get("english_question", q))
+        atype        = q_meta["answer_type"]
+        choices_i18n = q_meta.get("choices_i18n", {})
+        req_stats    = sc.get("stats", ["base", "percent"])
+
+        # Question label: datatable config > question_i18n["en"] > label > q
+        q_label = (
+            sc.get("label")
+            or q_meta.get("question_i18n", {}).get("en")
+            or q_meta.get("question_i18n", {}).get("vi")
+            or q_meta.get("label")
+            or q
+        )
 
         # base counts keyed by column index
         bases: dict[int, int] = {
-            i: _base_count(df[bc.mask], q)
+            i: _base_count(df[bc.mask], q_col)
             for i, bc in enumerate(banner_cols)
         }
 
@@ -236,45 +271,45 @@ def compute_table(
                 rows.append(StubRow(
                     label="Base", row_type="base",
                     counts=dict(bases),
-                    values={i: float(n) for i, n in bases.items()},
+                    values={i: float(v) for i, v in bases.items()},
                 ))
 
             elif stat == "percent":
-                if atype not in CODEABLE_TYPES:
+                if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
-                for code in sorted(values.keys(), key=lambda x: int(x)):
+                for code in sorted(choices_i18n.keys(), key=lambda x: int(x)):
                     cnts: dict[int, int]   = {}
                     pcts: dict[int, float] = {}
                     for i, bc in enumerate(banner_cols):
                         sub  = df[bc.mask]
                         base = bases[i]
-                        if atype == "multiplechoice":
-                            cnt = _code_count_mc(sub, q, code)
+                        if atype == "MA":
+                            cnt = _code_count_mc(sub, q_col, code)
                         else:
-                            cnt = _code_count_sc(sub, q, code)
+                            cnt = _code_count_sc(sub, q_col, code)
                         cnts[i] = cnt
                         pcts[i] = cnt / base if base else 0.0
 
-                    sig = _compute_sig_marks(q, code, atype, df, banner_cols, sig_config)
+                    sig = _compute_sig_marks(q_col, code, atype, df, banner_cols, sig_config)
                     rows.append(StubRow(
-                        label=values[code], row_type="percent",
+                        label=_choice_label(choices_i18n, code), row_type="percent",
                         counts=cnts, values=pcts, sig_marks=sig,
                     ))
 
             elif stat in ("t2b", "b2b"):
-                if atype not in CODEABLE_TYPES or not values:
+                if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
-                sorted_codes = sorted(values.keys(), key=lambda x: int(x))
+                sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
                 target = sorted_codes[-2:] if stat == "t2b" else sorted_codes[:2]
                 cnts: dict[int, int]   = {}
                 pcts: dict[int, float] = {}
                 for i, bc in enumerate(banner_cols):
                     sub  = df[bc.mask]
                     base = bases[i]
-                    if atype == "multiplechoice":
-                        cnt = sum(_code_count_mc(sub, q, c) for c in target)
+                    if atype == "MA":
+                        cnt = sum(_code_count_mc(sub, q_col, c) for c in target)
                     else:
-                        cnt = int(sub[q].isin([int(c) for c in target]).sum())
+                        cnt = int(sub[q_col].isin([int(c) for c in target]).sum())
                     cnts[i] = cnt
                     pcts[i] = cnt / base if base else 0.0
                 rows.append(StubRow(
@@ -283,11 +318,11 @@ def compute_table(
                 ))
 
             elif stat in ("mean", "std", "se"):
-                if atype != "singlechoice" or not values:
+                if atype != "SA" or not choices_i18n:
                     continue
                 stat_vals: dict[int, float] = {}
                 for i, bc in enumerate(banner_cols):
-                    numeric = pd.to_numeric(df[bc.mask][q], errors="coerce").dropna()
+                    numeric = pd.to_numeric(df[bc.mask][q_col], errors="coerce").dropna()
                     if len(numeric) == 0:
                         stat_vals[i] = 0.0
                         continue

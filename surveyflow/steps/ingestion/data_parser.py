@@ -59,7 +59,7 @@ _SCALAR_ROW_TYPES = {
 }
 
 # Integer type codes that indicate a matrix question in format=code row data
-_MATRIX_ROW_TYPES = {4, 5}
+_MATRIX_ROW_TYPES = {4, 5, 28, 29}
 
 _ROW_TYPE_FORMATTERS = {
     "multiplechoice":  _fmt_multiplechoice,
@@ -96,7 +96,8 @@ def _get_other_col_code(
     """Determine the 'other' choice code to use for the other_text column name.
 
     For SA (scalar answer): the answer value IS the selected code.
-    For MA (list answer):   find which selected code is in ``other_codes``.
+    For MA semicolon string: parse and find the matching other code.
+    For MA (list answer):    find which selected code is in ``other_codes``.
     Returns the code string (e.g. ``"9"``), or ``None`` when undecidable.
     """
     if not other_codes:
@@ -104,6 +105,13 @@ def _get_other_col_code(
     if isinstance(raw_ans, (int, float)):
         code = str(int(raw_ans))
         return code if code in other_codes else other_codes[0]
+    if isinstance(raw_ans, str):
+        # format=code MA: semicolon-separated codes e.g. "1;5;11"
+        for part in raw_ans.split(";"):
+            code = part.strip()
+            if code in other_codes:
+                return code
+        return other_codes[0]   # fallback
     if isinstance(raw_ans, list):
         # format=code MA: items are dicts with "answer_name" = code string
         for item in raw_ans:
@@ -173,7 +181,8 @@ def _parse_single_row(
                     record[f"q{pos}_r{row_code}"] = ";".join(col_codes)
 
             # ── matrix other_text ──────────────────────────────────────────────
-            other = (rq.get("other_text") or "").strip()
+            _ot = rq.get("other_text") or ""
+            other = (";".join(_ot) if isinstance(_ot, list) else _ot).strip()
             if other and row_cols:
                 q_other_codes = (other_codes_map or {}).get(qid, [])
                 # Find rows that selected an "other" column code
@@ -194,12 +203,23 @@ def _parse_single_row(
         record[f"q{pos}"] = answer
 
         # ── other_text ────────────────────────────────────────────────────────
-        other = (rq.get("other_text") or "").strip()
-        if other:
-            q_other_codes = (other_codes_map or {}).get(qid, [])
-            code = _get_other_col_code(rq.get("answer"), q_other_codes)
-            col_name = f"q{pos}_o{code}" if code else f"q{pos}_other"
-            record[col_name] = other
+        _ot = rq.get("other_text") or ""
+        q_other_codes = (other_codes_map or {}).get(qid, [])
+
+        if isinstance(_ot, list) and _ot and q_other_codes:
+            # Multiple other texts — zip with selected other codes (in answer order)
+            raw_ans_str = str(rq.get("answer") or "")
+            selected_others = [c for c in raw_ans_str.split(";") if c.strip() in q_other_codes]
+            for i, code in enumerate(selected_others):
+                val = str(_ot[i]).strip() if i < len(_ot) else ""
+                if val:
+                    record[f"q{pos}_o{code}"] = val
+        else:
+            other = (";".join(str(x) for x in _ot) if isinstance(_ot, list) else str(_ot)).strip()
+            if other:
+                code = _get_other_col_code(rq.get("answer"), q_other_codes)
+                col_name = f"q{pos}_o{code}" if code else f"q{pos}_other"
+                record[col_name] = other
 
     return record
 
@@ -370,6 +390,31 @@ def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):
     # e.g. "q7"     → ["q7_o9"]
     #      "q29_r1" → ["q29_r1_o9"]
     other_by_parent: dict[str, list[str]] = {}
+
+    # Seed from metadata other_choice_codes — ensures columns exist even with no data
+    col_to_meta_map = _col_to_meta_map(metadata)
+    for q in definition.get("questions", []):
+        col   = f"q{q['position']}"
+        meta  = col_to_meta_map.get(col)
+        if meta is None:
+            continue
+        atype = meta.get("answer_type", "")
+        if atype in _MATRIX_TYPES:
+            # matrix: other codes live on each sub-question
+            for sub_key, sub_meta in meta.get("sub_questions", {}).items():
+                for code in sub_meta.get("other_choice_codes", []):
+                    other_col = f"{sub_key}_o{code}"
+                    bucket = other_by_parent.setdefault(sub_key, [])
+                    if other_col not in bucket:
+                        bucket.append(other_col)
+        else:
+            for code in meta.get("other_choice_codes", []):
+                other_col = f"{col}_o{code}"
+                bucket = other_by_parent.setdefault(col, [])
+                if other_col not in bucket:
+                    bucket.append(other_col)
+
+    # Supplement with any actual other cols found in records (e.g. _other fallback)
     for rec in records:
         for k in rec:
             m = _OTHER_COL_RE.match(k)
@@ -428,9 +473,9 @@ def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):
     all_internal = meta_cols + q_cols
 
     df = pd.DataFrame(records)
-    for col in all_internal:
-        if col not in df.columns:
-            df[col] = ""
+    missing = [col for col in all_internal if col not in df.columns]
+    if missing:
+        df = pd.concat([df, pd.DataFrame("", index=df.index, columns=missing)], axis=1)
     df = df[all_internal].fillna("")
 
     # Rename question columns to labels

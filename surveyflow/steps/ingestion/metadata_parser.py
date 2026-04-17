@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 # answer_type codes (stored in metadata.json)
 _TYPE_LABEL: dict[int, str] = {
     1:    "FT",          # freetext
@@ -12,7 +10,12 @@ _TYPE_LABEL: dict[int, str] = {
     4:    "Matrix_SA",   # matrix — single answer per row
     5:    "Matrix_MA",   # matrix — multiple answers per row
     6:    "ranking",
+    9:    "MA",          # grid MA (answer coded same as MA)
+    28:   "Matrix_SA",   # matrix SA — numeric/rating per row
+    29:   "Matrix_MA",   # matrix MA — multiple cols per row
+    31:   "instruction", # section header / description block
     40:   "record",
+    1100: "instruction", # quota / screener field
     1101: "NUM",         # singlenumber (numeric input)
     1106: "user-name",
     1107: "user-phone",
@@ -38,40 +41,13 @@ CODEABLE_TYPES = {"SA", "MA", "ranking"}
 # answer_types excluded from rawdata.csv
 EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward"}
 
-# Regex to identify "other-specify" choices — uses word boundaries / lookahead
-# to avoid false positives (e.g. "khách" ≠ "khác", "otherwise" ≠ "other")
-_OTHER_RE = re.compile(
-    r"khác(?!\w)"       # Vietnamese "khác" not followed by a word char  (avoids "khách")
-    r"|\bother\b"       # English "other" as whole word
-    r"|\bspecify\b"     # "specify"
-    r"|\(\s*\)"         # empty/blank parentheses: "( )"
-    r"|ghi\s+r[oõ]",   # "ghi rõ" / "ghi ro"
-    re.IGNORECASE | re.UNICODE,
-)
-
-
 def _detect_other_codes(choices_i18n: dict) -> list[str]:
-    """Return choice codes that are "other-specify" inputs.
-
-    Strategy (in priority order):
-    1. ``is_other: true`` field on the choice dict  — explicit, from MCP
-    2. Regex pattern match on label text            — fallback for older data
-    """
-    explicit: list[str] = []
-    regex_fallback: list[str] = []
-
-    for code, i18n in choices_i18n.items():
-        if not isinstance(i18n, dict):
-            continue
-        if i18n.get("is_other"):
-            explicit.append(str(code))
-        else:
-            texts = [v for v in i18n.values() if isinstance(v, str)]
-            if any(_OTHER_RE.search(t) for t in texts):
-                regex_fallback.append(str(code))
-
-    # Use explicit if any found; otherwise fall back to regex
-    return explicit if explicit else regex_fallback
+    """Return choice codes that are "other-specify" inputs (is_other: true)."""
+    return [
+        str(code)
+        for code, i18n in choices_i18n.items()
+        if isinstance(i18n, dict) and i18n.get("is_other")
+    ]
 
 
 def _resolve_answer_type(q_type: int, input_type: int) -> str:

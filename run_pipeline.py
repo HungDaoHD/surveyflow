@@ -23,13 +23,20 @@ from surveyflow import Pipeline, PipelineConfig
 
 
 def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
-    """Load definition.json + rows_page_*.json (code format only) from input_dir."""
+    """Load definition.json + rows_page_*.json (code format only) from input_dir.
+
+    Files are pretty-printed in-place after loading so they are human-readable.
+    """
     def_path = input_dir / "definition.json"
     if not def_path.exists():
         raise FileNotFoundError(f"definition.json not found in {input_dir}")
 
     with def_path.open(encoding="utf-8") as f:
         definition = json.load(f)
+
+    # Re-save formatted
+    with def_path.open("w", encoding="utf-8") as f:
+        json.dump(definition, f, ensure_ascii=False, indent=2)
 
     # Code-format pages (rows_page_1.json, rows_page_2.json, …)
     rows_files = sorted(
@@ -42,7 +49,11 @@ def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
     rows_pages = []
     for p in rows_files:
         with p.open(encoding="utf-8") as f:
-            rows_pages.append(json.load(f))
+            page = json.load(f)
+        # Re-save formatted
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(page, f, ensure_ascii=False, indent=2)
+        rows_pages.append(page)
 
     logging.info("Loaded definition + %d code page(s) from %s", len(rows_pages), input_dir)
     return definition, rows_pages
@@ -53,7 +64,7 @@ def main() -> None:
     parser.add_argument("--input-dir",        required=True,  help="Folder with definition.json + rows_page_*.json")
     parser.add_argument("--output-dir",       required=True,  help="Base output folder (version subfolder created inside)")
     parser.add_argument("--version",          default=None,   help="Version tag e.g. v1 (default: auto timestamp)")
-    parser.add_argument("--datatable-config", required=True,  help="Path to datatable.json config")
+    parser.add_argument("--datatable-config", default=None,   help="Path to datatable.json config (optional — omit to run ingestion only)")
     parser.add_argument("--profile-status",   default="approved", help="Comma-separated statuses e.g. approved,pending")
     args = parser.parse_args()
 

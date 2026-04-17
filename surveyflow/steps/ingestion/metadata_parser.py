@@ -99,22 +99,34 @@ def parse_metadata(definition: dict) -> dict:
         key          = str(qid)
 
         # ── matrix: build sub_questions (one per row) ────────────────────────
-        if atype in _MATRIX_SUB_TYPE and isinstance(raw_choices, dict) and "rows" in raw_choices:
-            rows_map    = {str(k): str(v) for k, v in raw_choices["rows"].items()}
+        # rows/columns can be in `choices` (old format) or `choices_i18n` (new format)
+        _ci_rows = choices_i18n.get("rows", {}) if isinstance(choices_i18n, dict) else {}
+        _raw_rows = (raw_choices.get("rows") if isinstance(raw_choices, dict) else None) or _ci_rows
+
+        if atype in _MATRIX_SUB_TYPE and _raw_rows:
+            def _row_label(v: object) -> str:
+                if isinstance(v, dict):
+                    return v.get("vi") or v.get("en") or str(v)
+                return str(v)
+
+            rows_map    = {str(k): _row_label(v) for k, v in _raw_rows.items()}
             cols_i18n   = {str(k): v for k, v in choices_i18n.get("columns", {}).items()} if isinstance(choices_i18n, dict) else {}
             sub_atype   = _MATRIX_SUB_TYPE[atype]
 
             # detect "other" column codes once (shared across all rows)
             matrix_other_codes = _detect_other_codes(cols_i18n) if cols_i18n else []
 
+            parent_label = q.get("label") or col
             sub_questions: dict[str, dict] = {}
             for row_code, row_label in rows_map.items():
-                sub_key = f"{col}_r{row_code}"
+                sub_key      = f"{col}_r{row_code}"
+                sub_col_name = f"{parent_label}_r{row_code}"   # matches rawdata column name
                 sub_entry: dict = {
                     "parent":       key,
                     "row_index":    row_code,
                     "answer_type":  sub_atype,
-                    "label":        row_label,
+                    "label":        sub_col_name,   # = rawdata column name (e.g. Q9_1_r1)
+                    "row_label":    row_label,       # choice text (e.g. "Wakodo")
                     "choices_i18n": cols_i18n,
                 }
                 if matrix_other_codes:

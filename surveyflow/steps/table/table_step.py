@@ -476,16 +476,21 @@ class TableStep(Step):
         sig_config = config.get("significance_test", {"enabled": False})
 
         # Build lookup maps: q{pos} → df column name (label) and → metadata entry
+        # Also index by question label (e.g. "Q20") for convenience in datatable.json
         col_map: dict[str, str] = {}
         q_pos_to_meta: dict[str, dict] = {}
         for meta in metadata.get("questions", {}).values():
             pos = meta.get("position")
             if pos is None:
                 continue
-            key = f"q{pos}"
+            key   = f"q{pos}"
             label = meta.get("label") or key
             col_map[key]        = label
             q_pos_to_meta[key]  = meta
+            # Allow referencing by label (e.g. "Q20") in addition to "q29"
+            if label and label != key:
+                col_map[label]       = label
+                q_pos_to_meta[label] = meta
 
         logger.info("Building banner …")
         banner_cols = build_banner(config, df, col_map=col_map)

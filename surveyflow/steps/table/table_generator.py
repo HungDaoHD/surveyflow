@@ -9,7 +9,8 @@ from scipy import stats as _scipy_stats
 
 from surveyflow.steps.table.banner_builder import BannerColumn
 
-CODEABLE_TYPES = {"SA", "MA", "ranking"}
+CODEABLE_TYPES  = {"SA", "MA", "ranking"}
+MATRIX_TYPES    = {"Matrix_SA", "Matrix_MA", "Matrix_NUM"}
 
 STAT_LABELS: dict[str, str] = {
     "base": "Base",
@@ -180,7 +181,7 @@ def _compute_sig_marks(
 # ── Count helpers ──────────────────────────────────────────────────────────────
 
 def _base_count(sub: pd.DataFrame, col: str) -> int:
-    return int(sub[col].notna().sum())
+    return int(sub[col].apply(lambda v: pd.notna(v) and str(v).strip() != "").sum())
 
 
 def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
@@ -239,7 +240,7 @@ def compute_table(
         q_col  = _resolve(q)            # actual df column name
         q_meta = _get_meta(q)
 
-        if q_meta is None or q_col not in df.columns:
+        if q_meta is None:
             continue
 
         atype        = q_meta["answer_type"]
@@ -254,6 +255,54 @@ def compute_table(
             or q_meta.get("label")
             or q
         )
+
+        # ── Matrix: expand into one block per sub-question (row) ─────────────
+        if atype in MATRIX_TYPES:
+            sub_atype = "MA" if atype == "Matrix_MA" else "SA"
+            col_choices = choices_i18n.get("columns", {}) if isinstance(choices_i18n, dict) else {}
+            for sub_key, sub_meta in q_meta.get("sub_questions", {}).items():
+                sub_col   = sub_meta.get("label", sub_key)   # e.g. "Q9_1_r1"
+                row_label = sub_meta.get("row_label", sub_col)
+                if sub_col not in df.columns:
+                    continue
+                sub_bases: dict[int, int] = {
+                    i: _base_count(df[bc.mask], sub_col)
+                    for i, bc in enumerate(banner_cols)
+                }
+                sub_rows: list[StubRow] = []
+                for stat in DEFAULT_STATS_ORDER:
+                    if stat not in req_stats:
+                        continue
+                    if stat == "base":
+                        sub_rows.append(StubRow(
+                            label="Base", row_type="base",
+                            counts=dict(sub_bases),
+                            values={i: float(v) for i, v in sub_bases.items()},
+                        ))
+                    elif stat == "percent" and col_choices:
+                        for code in sorted(col_choices.keys(), key=lambda x: int(x)):
+                            cnts: dict[int, int]   = {}
+                            pcts: dict[int, float] = {}
+                            for i, bc in enumerate(banner_cols):
+                                sub  = df[bc.mask]
+                                base = sub_bases[i]
+                                cnt  = _code_count_mc(sub, sub_col, code) if sub_atype == "MA" else _code_count_sc(sub, sub_col, code)
+                                cnts[i] = cnt
+                                pcts[i] = cnt / base if base else 0.0
+                            sub_rows.append(StubRow(
+                                label=_choice_label(col_choices, code), row_type="percent",
+                                counts=cnts, values=pcts,
+                            ))
+                if sub_rows:
+                    blocks.append(StubBlock(
+                        question_code=f"{q.upper()}_R{sub_meta.get('row_index','')}",
+                        question_label=f"{q_label} — {row_label}",
+                        rows=sub_rows,
+                    ))
+            continue
+
+        if q_col not in df.columns:
+            continue
 
         # base counts keyed by column index
         bases: dict[int, int] = {

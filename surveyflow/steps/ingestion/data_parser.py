@@ -128,8 +128,7 @@ def _get_other_col_code(
 
 _ROW_META = (
     "task_id", "date_time", "Key_in_date", "lastmodified_date",
-    "profile_status", "store_id", "check_in", "check_out",
-    "user_location", "distance",
+    "profile_status",
 )
 
 
@@ -144,11 +143,6 @@ def _parse_single_row(
         "Key_in_date":       row.get("Key_in_date", ""),
         "lastmodified_date": row.get("lastmodified_date", ""),
         "profile_status":    row.get("profile_status", ""),
-        "store_id":          row.get("store-id", ""),
-        "check_in":          row.get("check_in", ""),
-        "check_out":         row.get("check_out", ""),
-        "user_location":     _fmt_location(row.get("user_location")),
-        "distance":          row.get("distance", ""),
     }
     used_pos: set[int] = set()
     for rq in row.get("questions", []):
@@ -354,7 +348,7 @@ def encode_records(
 # ─────────────────────────────────────────────
 
 # answer_types excluded entirely from rawdata.csv
-EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward"}
+EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction"}
 
 
 def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):
@@ -369,8 +363,7 @@ def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):
 
     meta_cols = [
         "task_id", "date_time", "Key_in_date", "lastmodified_date",
-        "profile_status", "store_id", "check_in", "check_out",
-        "user_location", "distance",
+        "profile_status",
     ]
 
     _MATRIX_TYPES = {"Matrix_SA", "Matrix_MA", "Matrix_NUM"}

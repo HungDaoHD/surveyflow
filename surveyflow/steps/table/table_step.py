@@ -360,7 +360,7 @@ def _write_sheet(
         _set(ws, cur, 1, block.question_code,
              font=_WHITE_BOLD, fill=_F_MID, align=_C,
              border=_brd(thick_bottom=True))
-        _set(ws, cur, 2, block.question_label,
+        _set(ws, cur, 2, f"{block.question_label} ({block.answer_type})",
              font=_WHITE_BOLD, fill=_F_MID, align=_L,
              border=_brd(thick_bottom=True))
         _set(ws, cur, 3, "Base" if base_row else "",

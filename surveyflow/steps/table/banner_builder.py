@@ -101,7 +101,12 @@ def build_banner(
     columns: list[BannerColumn] = []
 
     for entry in config.get("banner", []):
-        group_label = entry["label"]
+        # Prefix with question label when a single question is referenced
+        # e.g. entry label "Age" + question "Q1" → group_label "Q1 - Age"
+        if "question" in entry:
+            group_label = f"{entry['question']} - {entry['label']}"
+        else:
+            group_label = entry["label"]
 
         # ── Total ──────────────────────────────────────────────────────
         # Detect Total: no "groups" key AND no "question" key.

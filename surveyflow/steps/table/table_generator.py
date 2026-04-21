@@ -41,6 +41,7 @@ class StubRow:
 class StubBlock:
     question_code: str
     question_label: str
+    answer_type: str
     rows: list[StubRow]
 
 
@@ -297,6 +298,7 @@ def compute_table(
                     blocks.append(StubBlock(
                         question_code=f"{q.upper()}_R{sub_meta.get('row_index','')}",
                         question_label=f"{q_label} — {row_label}",
+                        answer_type=atype,
                         rows=sub_rows,
                     ))
             continue
@@ -392,6 +394,7 @@ def compute_table(
         blocks.append(StubBlock(
             question_code=q.upper(),
             question_label=q_label,
+            answer_type=atype,
             rows=rows,
         ))
 

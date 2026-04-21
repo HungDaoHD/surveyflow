@@ -39,7 +39,7 @@ _MATRIX_SUB_TYPE: dict[str, str] = {
 CODEABLE_TYPES = {"SA", "MA", "ranking"}
 
 # answer_types excluded from rawdata.csv
-EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction"}
+EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone"}
 
 def _detect_other_codes(choices_i18n: dict) -> list[str]:
     """Return choice codes that are "other-specify" inputs (is_other: true)."""

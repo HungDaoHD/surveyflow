@@ -493,7 +493,7 @@ class TableStep(Step):
                 q_pos_to_meta[label] = meta
 
         logger.info("Building banner …")
-        banner_cols = build_banner(config, df, col_map=col_map)
+        banner_cols = build_banner(config, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta)
         logger.info("  → %d banner columns", len(banner_cols))
 
         logger.info("Computing table …")

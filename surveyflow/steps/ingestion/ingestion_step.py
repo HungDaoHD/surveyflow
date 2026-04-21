@@ -91,3 +91,4 @@ class IngestionStep(Step):
         context["rawdata_path"]  = str(rawdata_path)
         context["metadata_path"] = str(metadata_path)
         return context
+        

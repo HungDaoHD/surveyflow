@@ -5,6 +5,14 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 
+def _ma_contains(series: pd.Series, code: str) -> pd.Series:
+    """Return boolean mask: True where *code* appears in semicolon-separated MA column."""
+    return series.apply(
+        lambda v: code in str(v).split(";")
+        if pd.notna(v) and str(v).strip() != "" else False
+    )
+
+
 def _letter(i: int) -> str:
     """0→A, 1→B, …, 25→Z, 26→AA, …"""
     letters = []
@@ -47,6 +55,7 @@ def build_banner(
     config: dict,
     df: pd.DataFrame,
     col_map: dict[str, str] | None = None,
+    q_pos_to_meta: dict[str, dict] | None = None,
 ) -> list[BannerColumn]:
     """Return one BannerColumn per banner subgroup defined in config.
 
@@ -56,10 +65,38 @@ def build_banner(
         Optional mapping from datatable ``question`` references (``"q10"``)
         to the actual column name in *df* (the question's ``label``).
         When ``None`` the reference is used as-is.
+    q_pos_to_meta
+        Optional mapping from question reference → metadata entry dict.
+        Used to detect MA questions and apply the correct mask logic.
     """
 
     def _resolve(q: str) -> str:
         return col_map[q] if col_map and q in col_map else q
+
+    def _is_ma(q_ref: str) -> bool:
+        if not q_pos_to_meta:
+            return False
+        meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref))
+        return (meta or {}).get("answer_type") == "MA"
+
+    def _make_mask(q_ref: str, col: str, value: int | None, values: list | None) -> pd.Series:
+        """Build respondent mask for one banner group, handling SA and MA."""
+        if _is_ma(q_ref):
+            if value is not None:
+                return _ma_contains(df[col], str(value))
+            elif values:
+                codes = [str(v) for v in values]
+                return df[col].apply(
+                    lambda v: any(c in str(v).split(";") for c in codes)
+                    if pd.notna(v) and str(v).strip() != "" else False
+                )
+            return pd.Series(False, index=df.index)
+        else:
+            if value is not None:
+                return df[col] == value
+            elif values:
+                return df[col].isin(values)
+            return pd.Series(False, index=df.index)
 
     columns: list[BannerColumn] = []
 
@@ -99,19 +136,21 @@ def build_banner(
             if "conditions" in grp:
                 mask = pd.Series(True, index=df.index)
                 for cond in grp["conditions"]:
-                    cq = _resolve(cond["question"])
-                    if "value" in cond:
-                        mask = mask & (df[cq] == cond["value"])
-                    elif "values" in cond:
-                        mask = mask & df[cq].isin(cond["values"])
+                    cq_ref = cond["question"]
+                    cq     = _resolve(cq_ref)
+                    mask   = mask & _make_mask(
+                        cq_ref, cq,
+                        value=cond.get("value"),
+                        values=cond.get("values"),
+                    )
             else:
-                q = _resolve(entry["question"])
-                if "value" in grp:
-                    mask = df[q] == grp["value"]
-                elif "values" in grp:
-                    mask = df[q].isin(grp["values"])
-                else:
-                    mask = pd.Series(False, index=df.index)
+                q_ref = entry["question"]
+                q     = _resolve(q_ref)
+                mask  = _make_mask(
+                    q_ref, q,
+                    value=grp.get("value"),
+                    values=grp.get("values"),
+                )
 
             columns.append(BannerColumn(
                 group_label=group_label,

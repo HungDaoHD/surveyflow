@@ -35,6 +35,7 @@ class StubRow:
     counts: dict[int, int]          # col_index → raw count
     values: dict[int, float]        # col_index → proportion or stat value
     sig_marks: dict[int, str] = field(default_factory=dict)  # col_index → "BC" / "a"
+    code: str | None = None         # numeric code for percent rows; None for stat rows
 
 
 @dataclass
@@ -106,19 +107,13 @@ def _compute_sig_marks(
     alpha90 = 0.10 if 90 in levels else None
 
     # Group non-total column indices for pairwise comparison.
-    # When a column has mid_label (e.g. cross-banner "Male"/"Female"), group by
-    # (group_label, mid_label) so Male columns compare among themselves and
-    # Female columns compare among themselves — NOT across mid-level groups.
+    # Columns are compared within the same (group_label, level_labels[0], …) bucket,
+    # i.e. only against siblings that share all parent level labels.
     groups: dict[str, list[int]] = {}
     for i, bc in enumerate(banner_cols):
         if bc.is_total:
             continue
-        if bc.sub_mid_label:
-            key = f"{bc.group_label}|{bc.sub_mid_label}|{bc.mid_label}"   # group = deepest parent cell
-        elif bc.mid_label:
-            key = f"{bc.group_label}|{bc.mid_label}"
-        else:
-            key = bc.group_label
+        key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
         groups.setdefault(key, []).append(i)
 
     marks: dict[int, list[str]] = {i: [] for i in range(len(banner_cols))}
@@ -190,12 +185,26 @@ def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
 
 
 def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
-    return int(
-        sub[col].apply(
-            lambda v: code in str(v).split(";")
-            if pd.notna(v) and str(v).strip() != "" else False
-        ).sum()
-    )
+    """Count rows where *code* appears in a semicolon-separated MA column.
+
+    Handles two storage formats produced by ingestion:
+    - Multi-select : "3;6;7"  (semicolon-separated string)
+    - Single-select: 4.0      (float, when only one option was chosen)
+    Floats are normalised to int strings before comparison.
+    """
+    def _check(v):
+        if pd.isna(v) or str(v).strip() == "":
+            return False
+        parts = []
+        for p in str(v).split(";"):
+            p = p.strip()
+            try:
+                p = str(int(float(p)))   # "4.0" → "4"
+            except (ValueError, TypeError):
+                pass
+            parts.append(p)
+        return code in parts
+    return int(sub[col].apply(_check).sum())
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -292,7 +301,7 @@ def compute_table(
                                 pcts[i] = cnt / base if base else 0.0
                             sub_rows.append(StubRow(
                                 label=_choice_label(col_choices, code), row_type="percent",
-                                counts=cnts, values=pcts,
+                                counts=cnts, values=pcts, code=code,
                             ))
                 if sub_rows:
                     blocks.append(StubBlock(
@@ -328,30 +337,95 @@ def compute_table(
             elif stat == "percent":
                 if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
-                for code in sorted(choices_i18n.keys(), key=lambda x: int(x)):
-                    cnts: dict[int, int]   = {}
-                    pcts: dict[int, float] = {}
+
+                stub_groups  = sc.get("groups", [])
+                grouped_codes: set[str] = {
+                    str(c) for grp in stub_groups for c in grp.get("codes", [])
+                }
+                sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
+
+                def _cnt_pct_union(target: list[str]) -> tuple[dict, dict]:
+                    """Count/pct for a union of codes (for group summary rows)."""
+                    _cnts: dict[int, int]   = {}
+                    _pcts: dict[int, float] = {}
+                    for _i, _bc in enumerate(banner_cols):
+                        _sub  = df[_bc.mask]
+                        _base = bases[_i]
+                        if atype == "MA":
+                            _cnt = int(_sub[q_col].apply(
+                                lambda v: any(c in str(v).split(";") for c in target)
+                                if pd.notna(v) and str(v).strip() != "" else False
+                            ).sum())
+                        else:
+                            _cnt = int(_sub[q_col].isin([int(c) for c in target]).sum())
+                        _cnts[_i] = _cnt
+                        _pcts[_i] = _cnt / _base if _base else 0.0
+                    return _cnts, _pcts
+
+                # ── Groups (combine / netted) ─────────────────────────────
+                for grp in stub_groups:
+                    grp_codes = [
+                        str(c) for c in grp.get("codes", [])
+                        if str(c) in choices_i18n
+                    ]
+                    if not grp_codes:
+                        continue
+                    grp_type = grp.get("type", "netted")
+
+                    g_cnts, g_pcts = _cnt_pct_union(grp_codes)
+                    rows.append(StubRow(
+                        label=grp["label"], row_type="group",
+                        counts=g_cnts, values=g_pcts,
+                    ))
+
+                    if grp_type == "netted":
+                        for code in grp_codes:
+                            cnts: dict[int, int]   = {}
+                            pcts: dict[int, float] = {}
+                            for i, bc in enumerate(banner_cols):
+                                sub  = df[bc.mask]
+                                base = bases[i]
+                                cnt  = _code_count_mc(sub, q_col, code) if atype == "MA" \
+                                       else _code_count_sc(sub, q_col, code)
+                                cnts[i] = cnt
+                                pcts[i] = cnt / base if base else 0.0
+                            sig = _compute_sig_marks(
+                                q_col, code, atype, df, banner_cols, sig_config
+                            )
+                            rows.append(StubRow(
+                                label=_choice_label(choices_i18n, code), row_type="percent",
+                                counts=cnts, values=pcts, sig_marks=sig, code=code,
+                            ))
+
+                # ── Ungrouped codes ───────────────────────────────────────
+                for code in sorted_codes:
+                    if code in grouped_codes:
+                        continue
+                    cnts = {}
+                    pcts = {}
                     for i, bc in enumerate(banner_cols):
                         sub  = df[bc.mask]
                         base = bases[i]
-                        if atype == "MA":
-                            cnt = _code_count_mc(sub, q_col, code)
-                        else:
-                            cnt = _code_count_sc(sub, q_col, code)
+                        cnt  = _code_count_mc(sub, q_col, code) if atype == "MA" \
+                               else _code_count_sc(sub, q_col, code)
                         cnts[i] = cnt
                         pcts[i] = cnt / base if base else 0.0
-
                     sig = _compute_sig_marks(q_col, code, atype, df, banner_cols, sig_config)
                     rows.append(StubRow(
                         label=_choice_label(choices_i18n, code), row_type="percent",
-                        counts=cnts, values=pcts, sig_marks=sig,
+                        counts=cnts, values=pcts, sig_marks=sig, code=code,
                     ))
 
             elif stat in ("t2b", "b2b"):
                 if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
-                sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
-                target = sorted_codes[-2:] if stat == "t2b" else sorted_codes[:2]
+                custom_key   = "t2b_codes" if stat == "t2b" else "b2b_codes"
+                custom_codes = sc.get(custom_key)
+                if custom_codes is not None:
+                    target = [str(c) for c in custom_codes]
+                else:
+                    sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
+                    target = sorted_codes[-2:] if stat == "t2b" else sorted_codes[:2]
                 cnts: dict[int, int]   = {}
                 pcts: dict[int, float] = {}
                 for i, bc in enumerate(banner_cols):
@@ -371,9 +445,20 @@ def compute_table(
             elif stat in ("mean", "std", "se"):
                 if atype != "SA" or not choices_i18n:
                     continue
+                # mean_factor: {"1": 5, "2": 4, ...} maps code → numeric weight
+                mean_factor: dict | None = sc.get("mean_factor")
                 stat_vals: dict[int, float] = {}
                 for i, bc in enumerate(banner_cols):
-                    numeric = pd.to_numeric(df[bc.mask][q_col], errors="coerce").dropna()
+                    raw = pd.to_numeric(df[bc.mask][q_col], errors="coerce").dropna()
+                    if len(raw) == 0:
+                        stat_vals[i] = 0.0
+                        continue
+                    if mean_factor:
+                        numeric = raw.map(
+                            lambda v: mean_factor.get(str(int(v)), mean_factor.get(int(v)))
+                        ).dropna()
+                    else:
+                        numeric = raw
                     if len(numeric) == 0:
                         stat_vals[i] = 0.0
                         continue

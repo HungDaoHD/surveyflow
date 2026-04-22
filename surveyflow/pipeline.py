@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from surveyflow.core.config import PipelineConfig
 from surveyflow.steps.ingestion.ingestion_step import IngestionStep
 from surveyflow.steps.table.table_step import TableStep
@@ -16,18 +18,34 @@ logger = logging.getLogger(__name__)
 class Pipeline:
     """Run the full survey data pipeline.
 
-    Usage
-    -----
+    Folder layout
+    -------------
+    output_dir/
+    ├── data/           ← rawdata.csv + metadata.json (generated once from mcp/)
+    ├── datatable/      ← datatable.json (managed by Claude)
+    ├── v1/             ← datatable.xlsx only
+    └── v2/
+
+    Usage — first run (ingestion + table)
+    -------------------------------------
     >>> pipeline = Pipeline(PipelineConfig(
-    ...     definition  = definition,   # from get_survey_definition
-    ...     rows_pages  = rows_pages,   # from get_survey_rows (all pages)
-    ...     output_dir  = "output/VN8947",
-    ...     datatable_config = "output/VN8947/datatable.json",   # optional
+    ...     definition       = definition,
+    ...     rows_pages       = rows_pages,
+    ...     output_dir       = "output/VN8947",
+    ...     datatable_config = "output/VN8947/datatable/datatable.json",
+    ...     version          = "v1",
     ... ))
     >>> result = pipeline.run()
-    >>> result["rawdata_path"]      # "output/VN8947/rawdata.csv"
-    >>> result["metadata_path"]     # "output/VN8947/metadata.json"
-    >>> result["datatable_path"]    # "output/VN8947/datatable.xlsx" (if config given)
+
+    Usage — table-only (data already exists)
+    -----------------------------------------
+    >>> pipeline = Pipeline(PipelineConfig(
+    ...     output_dir       = "output/VN8947",
+    ...     skip_ingestion   = True,
+    ...     datatable_config = "output/VN8947/datatable/datatable.json",
+    ...     version          = "v2",
+    ... ))
+    >>> result = pipeline.run()
     """
 
     def __init__(self, config: PipelineConfig) -> None:
@@ -36,30 +54,53 @@ class Pipeline:
     # ── public ────────────────────────────────────────────────────────────────
 
     def run(self) -> dict:
-        """Execute all steps and return the final context dict."""
+        """Execute pipeline steps and return the final context dict."""
         cfg = self.config
 
-        version    = cfg.version or datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = str(Path(cfg.output_dir) / version)
+        version      = cfg.version or datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_dir     = Path(cfg.output_dir)
+        data_dir     = Path(cfg.data_dir) if cfg.data_dir else base_dir / "data"
+        versioned_dir = base_dir / version   # datatable.xlsx goes here
 
-        logger.info("Pipeline started  →  %s", output_dir)
+        logger.info("Pipeline started  →  %s", versioned_dir)
 
         context: dict = {
             "definition":     cfg.definition,
             "rows_pages":     cfg.rows_pages,
-            "output_dir":     output_dir,
+            "data_dir":       str(data_dir),
+            "output_dir":     str(versioned_dir),   # table step writes xlsx here
             "profile_status": cfg.profile_status,
             "version":        version,
         }
 
-        # ── Step 1: Ingestion ──────────────────────────────────────────
-        logger.info("── Step 1: Ingestion")
-        context = IngestionStep().run(context)
+        # ── Step 1: Ingestion ──────────────────────────────────────────────
+        if not cfg.skip_ingestion:
+            if cfg.definition is None or cfg.rows_pages is None:
+                raise ValueError(
+                    "definition and rows_pages are required when skip_ingestion=False"
+                )
+            logger.info("── Step 1: Ingestion")
+            context = IngestionStep().run(context)
+        else:
+            # Load existing rawdata + metadata from data_dir
+            rawdata_path  = data_dir / "rawdata.csv"
+            metadata_path = data_dir / "metadata.json"
+            if not rawdata_path.exists():
+                raise FileNotFoundError(
+                    f"rawdata.csv not found in {data_dir}. "
+                    "Run pipeline without skip_ingestion first."
+                )
+            logger.info("── Step 1: Ingestion (skipped — reading from %s)", data_dir)
+            context["rawdata"]       = pd.read_csv(rawdata_path)
+            with metadata_path.open(encoding="utf-8") as f:
+                context["metadata"]  = json.load(f)
+            context["rawdata_path"]  = str(rawdata_path)
+            context["metadata_path"] = str(metadata_path)
 
-        # ── Step 2: Table (optional) ───────────────────────────────────
+        # ── Step 2: Table (optional) ───────────────────────────────────────
         if cfg.datatable_config is not None:
             logger.info("── Step 2: Table")
-            context["df"]              = context["rawdata"]   # bridge key
+            context["df"]               = context["rawdata"]
             context["datatable_config"] = self._load_datatable_config(
                 cfg.datatable_config
             )

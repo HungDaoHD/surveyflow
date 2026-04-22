@@ -39,7 +39,7 @@ _MATRIX_SUB_TYPE: dict[str, str] = {
 CODEABLE_TYPES = {"SA", "MA", "ranking"}
 
 # answer_types excluded from rawdata.csv
-EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone"}
+EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone", "photo"}
 
 def _detect_other_codes(choices_i18n: dict) -> list[str]:
     """Return choice codes that are "other-specify" inputs (is_other: true)."""
@@ -50,7 +50,9 @@ def _detect_other_codes(choices_i18n: dict) -> list[str]:
     ]
 
 
-def _resolve_answer_type(q_type: int, input_type: int) -> str:
+def _resolve_answer_type(q_type: int, input_type: int, type_name: str = "") -> str:
+    if type_name == "photo":
+        return "photo"
     if q_type == 1 and input_type in _INPUT_TYPE_LABEL:
         return _INPUT_TYPE_LABEL[input_type]
     return _TYPE_LABEL.get(q_type, f"unknown_{q_type}")
@@ -86,7 +88,7 @@ def parse_metadata(definition: dict) -> dict:
     for q in definition.get("questions", []):
         q_type   = q["type"]
         inp_type = q.get("input_type", 0)
-        atype    = _resolve_answer_type(q_type, inp_type)
+        atype    = _resolve_answer_type(q_type, inp_type, q.get("type_name", ""))
 
         if atype in _EX:
             continue

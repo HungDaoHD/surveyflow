@@ -348,7 +348,7 @@ def encode_records(
 # ─────────────────────────────────────────────
 
 # answer_types excluded entirely from rawdata.csv
-EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone"}
+EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone", "photo"}
 
 
 def records_to_dataframe(records: list[dict], definition: dict, metadata: dict):

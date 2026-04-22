@@ -32,7 +32,7 @@ class IngestionStep(Step):
     --------------
     definition   : dict   raw get_survey_definition response
     rows_pages   : list   raw get_survey_rows responses (one per page)
-    output_dir   : str    destination folder
+    data_dir     : str    destination folder for rawdata.csv + metadata.json
 
     Context outputs
     ---------------
@@ -45,7 +45,7 @@ class IngestionStep(Step):
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         definition = context["definition"]
         rows_pages = context["rows_pages"]
-        output_dir = Path(context.get("output_dir", "."))
+        output_dir = Path(context.get("data_dir") or context.get("output_dir", "."))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. metadata

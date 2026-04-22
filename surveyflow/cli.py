@@ -3,14 +3,35 @@
 Installed as ``surveyflow-run`` after ``pip install surveyflow``.
 Also callable directly via ``python run_pipeline.py`` in the project root.
 
-Usage::
+Folder layout
+-------------
+output/SURVEY_NAME/
+├── mcp/                ← definition.json + rows_page_*.json (from QMe MCP)
+├── data/               ← rawdata.csv + metadata.json (generated once from mcp/)
+├── datatable/          ← datatable.json (managed by Claude)
+├── v1/                 ← datatable.xlsx only
+└── v2/
 
-    surveyflow-run \
-        --input-dir   output/VN8947/input   \
-        --output-dir  output/VN8947         \
-        --version     v1                    \
-        [--datatable-config datatable.json] \
-        [--profile-status approved]
+Usage — first run (ingestion + table)::
+
+    surveyflow-run \\
+        --mcp-dir         output/VN8947/mcp        \\
+        --output-dir      output/VN8947             \\
+        --version         v1
+
+Usage — table-only (data/ already exists, just update datatable.xlsx)::
+
+    surveyflow-run \\
+        --output-dir      output/VN8947             \\
+        --version         v2
+
+Usage — force re-ingestion (fetch new data)::
+
+    surveyflow-run \\
+        --mcp-dir         output/VN8947/mcp        \\
+        --output-dir      output/VN8947             \\
+        --version         v3                        \\
+        --force-ingestion
 """
 from __future__ import annotations
 
@@ -23,25 +44,23 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
-def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
-    """Load definition.json + rows_page_*.json from *input_dir*."""
-    def_path = input_dir / "definition.json"
+def _load_mcp(mcp_dir: Path) -> tuple[dict, list[dict]]:
+    """Load definition.json + rows_page_*.json from *mcp_dir*."""
+    def_path = mcp_dir / "definition.json"
     if not def_path.exists():
-        raise FileNotFoundError(f"definition.json not found in {input_dir}")
+        raise FileNotFoundError(f"definition.json not found in {mcp_dir}")
 
     with def_path.open(encoding="utf-8") as f:
         definition = json.load(f)
-
-    # Re-save formatted
     with def_path.open("w", encoding="utf-8") as f:
         json.dump(definition, f, ensure_ascii=False, indent=2)
 
     rows_files = sorted(
-        p for p in input_dir.glob("rows_page_*.json")
+        p for p in mcp_dir.glob("rows_page_*.json")
         if not p.stem.endswith("_text")
     )
     if not rows_files:
-        raise FileNotFoundError(f"No rows_page_*.json found in {input_dir}")
+        raise FileNotFoundError(f"No rows_page_*.json found in {mcp_dir}")
 
     rows_pages = []
     for p in rows_files:
@@ -51,7 +70,7 @@ def _load_input(input_dir: Path) -> tuple[dict, list[dict]]:
             json.dump(page, f, ensure_ascii=False, indent=2)
         rows_pages.append(page)
 
-    logging.info("Loaded definition + %d code page(s) from %s", len(rows_pages), input_dir)
+    logging.info("Loaded definition + %d code page(s) from %s", len(rows_pages), mcp_dir)
     return definition, rows_pages
 
 
@@ -62,26 +81,77 @@ def main(argv: list[str] | None = None) -> None:
         prog="surveyflow-run",
         description="SurveyFlow Pipeline Runner",
     )
-    parser.add_argument("--input-dir",        required=True,  help="Folder with definition.json + rows_page_*.json")
-    parser.add_argument("--output-dir",       required=True,  help="Base output folder (version subfolder created inside)")
-    parser.add_argument("--version",          default=None,   help="Version tag e.g. v1 (default: auto timestamp)")
-    parser.add_argument("--datatable-config", default=None,   help="Path to datatable.json (optional)")
-    parser.add_argument("--profile-status",   default="approved", help="Comma-separated statuses e.g. approved,pending")
+    parser.add_argument(
+        "--mcp-dir",
+        default=None,
+        help="Folder with definition.json + rows_page_*.json (required for ingestion)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Base output folder (data/, datatable/, vX/ are created inside)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Folder for rawdata.csv + metadata.json (default: {output_dir}/data)",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        help="Version tag for datatable.xlsx output, e.g. v1 (default: auto timestamp)",
+    )
+    parser.add_argument(
+        "--datatable-config",
+        default=None,
+        help="Path to datatable.json (default: {output_dir}/datatable/datatable.json)",
+    )
+    parser.add_argument(
+        "--force-ingestion",
+        action="store_true",
+        help="Re-run ingestion even if data/ already exists",
+    )
+    parser.add_argument(
+        "--profile-status",
+        default="approved",
+        help="Comma-separated statuses e.g. approved,pending",
+    )
     args = parser.parse_args(argv)
 
-    input_dir  = Path(args.input_dir)
     output_dir = Path(args.output_dir)
+    data_dir   = Path(args.data_dir) if args.data_dir else output_dir / "data"
     statuses   = [s.strip() for s in args.profile_status.split(",") if s.strip()]
 
-    definition, rows_pages = _load_input(input_dir)
+    # Auto-detect whether to run ingestion
+    rawdata_exists  = (data_dir / "rawdata.csv").exists()
+    skip_ingestion  = rawdata_exists and not args.force_ingestion
+
+    # Load MCP files when ingestion is needed
+    definition, rows_pages = None, None
+    if not skip_ingestion:
+        if not args.mcp_dir:
+            parser.error(
+                "--mcp-dir is required when ingestion needs to run "
+                f"(data not found at {data_dir} or --force-ingestion was set)"
+            )
+        definition, rows_pages = _load_mcp(Path(args.mcp_dir))
+
+    # Resolve datatable config path
+    datatable_config = args.datatable_config
+    if datatable_config is None:
+        default_dt = output_dir / "datatable" / "datatable.json"
+        if default_dt.exists():
+            datatable_config = str(default_dt)
 
     result = Pipeline(PipelineConfig(
         definition       = definition,
         rows_pages       = rows_pages,
         output_dir       = str(output_dir),
+        data_dir         = str(data_dir),
+        skip_ingestion   = skip_ingestion,
         profile_status   = statuses,
         version          = args.version,
-        datatable_config = args.datatable_config,
+        datatable_config = datatable_config,
     )).run()
 
     print("\n--- Output ---")

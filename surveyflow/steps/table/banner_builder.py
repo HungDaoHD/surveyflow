@@ -1,6 +1,7 @@
 """Build banner column definitions from datatable config."""
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 import pandas as pd
 
@@ -25,30 +26,19 @@ def _letter(i: int) -> str:
 
 @dataclass
 class BannerColumn:
-    group_label:    str        # e.g. "Gender x Age x Occupation" — sig test grouping key
-    subgroup_label: str        # innermost label  e.g. "Working" / "Male" / "<30"
-    letter:         str        # A, B, C … resets at outermost mid-level boundary
+    group_label:    str        # e.g. "Q1 x Q2 x Q3" — sig test grouping key
+    subgroup_label: str        # leaf/detail label, always shown in DETAIL row
+    letter:         str        # A, B, C … resets when outermost level changes
     mask:           pd.Series
-    is_total:       bool = False   # True → excluded from sig test
-    mid_label:      str  = ""      # 2nd-level sub-header  e.g. "<30" / "Male"
-    sub_mid_label:  str  = ""      # 1st-level sub-header  e.g. "Male" (for 3-level cross)
+    is_total:       bool       = False   # True → excluded from sig test
+    level_labels:   list[str]  = field(default_factory=list)
+    # Header display rules:
+    # level_labels = []                 → plain: group(5) / detail(6)
+    # level_labels = ["A"]              → 2-level: group(5) / A(6) / detail(7)
+    # level_labels = ["A","B","C","D"]  → 5-level: group(5)/A(6)/B(7)/C(8)/D(9)/detail(10)
     #
-    # Header display rules
-    # ─────────────────────────────────────────────────────────────────
-    # 1-level  (no mid, no sub_mid):
-    #   row 6 = subgroup_label
-    #
-    # 2-level  (mid only):
-    #   row 6 = mid_label  (merged across same group+mid)
-    #   row 7 = subgroup_label
-    #
-    # 3-level  (sub_mid + mid):
-    #   row 6 = sub_mid_label  (merged across same group+sub_mid)
-    #   row 7 = mid_label      (merged across same group+sub_mid+mid)
-    #   row 8 = subgroup_label
-    #
-    # For sig-test grouping, columns are compared within the same
-    # (group_label, sub_mid_label, mid_label) bucket.
+    # Sig-test grouping: columns are compared within the same
+    # (group_label, level_labels[0], …, level_labels[-1]) bucket.
 
 
 def build_banner(
@@ -62,12 +52,13 @@ def build_banner(
     Parameters
     ----------
     col_map
-        Optional mapping from datatable ``question`` references (``"q10"``)
+        Optional mapping from datatable ``question`` references (``"Q1"``)
         to the actual column name in *df* (the question's ``label``).
         When ``None`` the reference is used as-is.
     q_pos_to_meta
         Optional mapping from question reference → metadata entry dict.
-        Used to detect MA questions and apply the correct mask logic.
+        Used to detect MA questions and apply the correct mask logic,
+        and to look up choice labels for ``cross`` banners.
     """
 
     def _resolve(q: str) -> str:
@@ -98,20 +89,27 @@ def build_banner(
                 return df[col].isin(values)
             return pd.Series(False, index=df.index)
 
+    def _code_label(q_ref: str, code: int) -> str:
+        """Look up the English label for a choice code from metadata."""
+        if not q_pos_to_meta:
+            return str(code)
+        meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref))
+        if not meta:
+            return str(code)
+        return meta.get("choices_i18n", {}).get(str(code), {}).get("en", str(code))
+
     columns: list[BannerColumn] = []
 
     for entry in config.get("banner", []):
-        # Prefix with question label when a single question is referenced
-        # e.g. entry label "Age" + question "Q1" → group_label "Q1 - Age"
+        # Prefix group_label with question label when a single question is referenced
         if "question" in entry:
             group_label = f"{entry['question']} - {entry['label']}"
         else:
             group_label = entry["label"]
 
-        # ── Total ──────────────────────────────────────────────────────
-        # Detect Total: no "groups" key AND no "question" key.
-        # Cross-banners have "groups" but no top-level "question" — NOT Total.
-        if "groups" not in entry and "question" not in entry:
+        # ── Total ──────────────────────────────────────────────────────────────
+        # Detect Total: no "groups", no "question", no "cross" key.
+        if "groups" not in entry and "question" not in entry and "cross" not in entry:
             columns.append(BannerColumn(
                 group_label=group_label,
                 subgroup_label="Total",
@@ -121,23 +119,70 @@ def build_banner(
             ))
             continue
 
-        # ── Letter index — resets at the outermost mid-level boundary ──
-        # • 3-level (sub_mid_label): reset when sub_mid_label changes
-        # • 2-level (mid_label only): reset when mid_label changes
-        # • Regular (no mid): increments continuously
-        letter_idx = 0
-        prev_outer = None
+        # ── N-way cross-tab (via "cross" key) ──────────────────────────────────
+        # Format:
+        #   { "label": "Q1 x Q2 x Q3", "cross": [
+        #       { "question": "Q1", "values": [2, 3] },
+        #       { "question": "Q2", "values": [2, 3, 4] },
+        #       ...
+        #   ]}
+        # Generates the cartesian product of all dimensions.
+        # level_labels = labels for dims[0..n-2]; subgroup_label = label for dim[-1].
+        if "cross" in entry:
+            dims = entry["cross"]
+            dim_items: list[list[dict]] = []
+            for dim in dims:
+                q_ref = dim["question"]
+                q     = _resolve(q_ref)
+                items = []
+                for code in dim["values"]:
+                    label = _code_label(q_ref, code)
+                    mask  = _make_mask(q_ref, q, value=code, values=None)
+                    items.append({"label": label, "mask": mask})
+                dim_items.append(items)
+
+            letter_idx  = 0
+            prev_outer: str | None = None
+
+            for combo in itertools.product(*dim_items):
+                outer = combo[0]["label"]
+                if outer != prev_outer:
+                    letter_idx = 0
+                    prev_outer = outer
+
+                combined_mask = pd.Series(True, index=df.index)
+                for item in combo:
+                    combined_mask = combined_mask & item["mask"]
+
+                columns.append(BannerColumn(
+                    group_label=group_label,
+                    subgroup_label=combo[-1]["label"],
+                    letter=_letter(letter_idx),
+                    mask=combined_mask,
+                    is_total=False,
+                    level_labels=[item["label"] for item in combo[:-1]],
+                ))
+                letter_idx += 1
+            continue
+
+        # ── Regular banner / manual cross-tab (via "groups" key) ───────────────
+        # Supports:
+        #   - Single-question banner:  entry has "question" + groups with value/values
+        #   - Manual cross-tab:        groups have "conditions" + optional "subgroup"/"subgroup2"
+        letter_idx  = 0
+        prev_outer: str | None = None
 
         for grp in entry.get("groups", []):
-            sub_mid = grp.get("subgroup2", "")   # outermost mid-level
-            mid_lbl = grp.get("subgroup",  "")   # inner mid-level (or only mid-level)
+            sub_mid = grp.get("subgroup2", "")   # outermost intermediate level
+            mid_lbl = grp.get("subgroup",  "")   # inner intermediate level
 
-            outer = sub_mid if sub_mid else mid_lbl
+            level_labels = [x for x in [sub_mid, mid_lbl] if x]
+            outer = level_labels[0] if level_labels else None
             if outer and outer != prev_outer:
                 letter_idx = 0
                 prev_outer = outer
 
-            # ── Build mask ────────────────────────────────────────────
+            # ── Build mask ──────────────────────────────────────────────────────
             if "conditions" in grp:
                 mask = pd.Series(True, index=df.index)
                 for cond in grp["conditions"]:
@@ -163,8 +208,7 @@ def build_banner(
                 letter=_letter(letter_idx),
                 mask=mask,
                 is_total=False,
-                mid_label=mid_lbl,
-                sub_mid_label=sub_mid,
+                level_labels=level_labels,
             ))
             letter_idx += 1
 

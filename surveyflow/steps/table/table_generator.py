@@ -22,9 +22,13 @@ STAT_LABELS: dict[str, str] = {
     "mean": "Mean",
     "std":  "Std",
     "se":   "Standard Error",
+    "min":  "Min",
+    "max":  "Max",
 }
 
-DEFAULT_STATS_ORDER = ["base", "percent", "t2b", "b2b", "mean", "std", "se"]
+DEFAULT_STATS_ORDER = ["base", "percent", "t2b", "b2b", "mean", "std", "se", "min", "max"]
+
+NUMERIC_TYPES = {"SA", "NUM", "multiplenumber"}
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -788,11 +792,13 @@ def compute_table(
                     counts=cnts, values=pcts,
                 ))
 
-            elif stat in ("mean", "std", "se"):
-                if atype != "SA" or not choices_i18n:
+            elif stat in ("mean", "std", "se", "min", "max"):
+                if atype not in NUMERIC_TYPES:
                     continue
-                # mean_factor: {"1": 5, "2": 4, ...} maps code → numeric weight
-                mean_factor: dict | None = sc.get("mean_factor")
+                if atype == "SA" and not choices_i18n:
+                    continue
+                # mean_factor: {"1": 5, "2": 4, ...} maps code → numeric weight (SA only)
+                mean_factor: dict | None = sc.get("mean_factor") if atype == "SA" else None
                 stat_vals: dict[int, float] = {}
                 for i, bc in enumerate(banner_cols):
                     raw = pd.to_numeric(df[bc.mask][q_col], errors="coerce").dropna()
@@ -814,8 +820,12 @@ def compute_table(
                         stat_vals[i] = round(m, 2)
                     elif stat == "std":
                         stat_vals[i] = round(s, 2)
-                    else:
+                    elif stat == "se":
                         stat_vals[i] = round(s / np.sqrt(len(numeric)), 2)
+                    elif stat == "min":
+                        stat_vals[i] = round(float(numeric.min()), 2)
+                    elif stat == "max":
+                        stat_vals[i] = round(float(numeric.max()), 2)
                 rows.append(StubRow(
                     label=STAT_LABELS[stat], row_type=stat,
                     counts={i: 0 for i in stat_vals},

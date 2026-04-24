@@ -50,9 +50,15 @@ def _detect_other_codes(choices_i18n: dict) -> list[str]:
     ]
 
 
+_TYPE_NAME_LABEL: dict[str, str] = {
+    "gender":         "SA",
+    "married-status": "SA",
+    "photo":          "photo",
+}
+
 def _resolve_answer_type(q_type: int, input_type: int, type_name: str = "") -> str:
-    if type_name == "photo":
-        return "photo"
+    if type_name in _TYPE_NAME_LABEL:
+        return _TYPE_NAME_LABEL[type_name]
     if q_type == 1 and input_type in _INPUT_TYPE_LABEL:
         return _INPUT_TYPE_LABEL[input_type]
     return _TYPE_LABEL.get(q_type, f"unknown_{q_type}")

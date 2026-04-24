@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 import warnings
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ from surveyflow.steps.table.banner_builder import BannerColumn
 
 CODEABLE_TYPES  = {"SA", "MA", "ranking"}
 MATRIX_TYPES    = {"Matrix_SA", "Matrix_MA", "Matrix_NUM"}
+
+_SUB_Q_RE = re.compile(r'^(.+?)_r(\d+)$', re.IGNORECASE)
 
 STAT_LABELS: dict[str, str] = {
     "base": "Base",
@@ -44,6 +47,14 @@ class StubBlock:
     question_label: str
     answer_type: str
     rows: list[StubRow]
+
+
+@dataclass
+class RowGroupBlock:
+    """A section grouped by matrix rows (e.g. brands), each containing sub-blocks per question."""
+    row_label: str              # e.g. "1. Castrol"
+    row_code:  str              # e.g. "1"
+    sub_blocks: list[StubBlock]
 
 
 # ── Significance test ──────────────────────────────────────────────────────────
@@ -217,6 +228,176 @@ def _choice_label(choices_i18n: dict, code: str) -> str:
     return entry.get("en") or entry.get("vi") or next(iter(entry.values()), str(code))
 
 
+def _row_label_text(v: object) -> str:
+    if isinstance(v, dict):
+        return v.get("en") or v.get("vi") or next(iter(v.values()), "")
+    return str(v)
+
+
+def _parse_sub_q_ref(q: str, q_pos_to_meta: dict) -> dict | None:
+    """Parse 'Q14_r10' syntax → return sub_question meta dict, or None if not a sub-ref.
+
+    Rule 3: when a matrix sub-question is referenced directly (e.g. Q14_r10),
+    it behaves as a regular SA/MA question using the parent's columns as choices.
+    """
+    m = _SUB_Q_RE.match(q)
+    if not m:
+        return None
+    parent_label = m.group(1)
+    row_code     = m.group(2)
+    parent_meta  = q_pos_to_meta.get(parent_label)
+    if parent_meta is None or parent_meta.get("answer_type", "") not in MATRIX_TYPES:
+        return None
+    for sm in parent_meta.get("sub_questions", {}).values():
+        if str(sm.get("row_index", "")) == row_code:
+            return sm
+    return None
+
+
+def _validate_row_group(items: list[dict], q_pos_to_meta: dict) -> dict:
+    """Validate row_group rules 1 & 2. Returns the shared rows dict on success."""
+    if not items:
+        raise ValueError("row_group requires at least one item in 'items'.")
+
+    first_rows: dict | None = None
+    first_q:    str | None  = None
+
+    for item in items:
+        q      = item.get("question", "")
+        q_meta = q_pos_to_meta.get(q)
+
+        # Rule 1: all items must be matrix questions
+        if q_meta is None:
+            raise ValueError(f"row_group: question '{q}' not found in metadata.")
+        atype = q_meta.get("answer_type", "")
+        if atype not in MATRIX_TYPES:
+            raise ValueError(
+                f"row_group: question '{q}' has answer_type '{atype}'. "
+                f"Only Matrix_SA / Matrix_MA / Matrix_NUM are allowed in row_group. "
+                f"Non-matrix questions must be placed outside the row_group. "
+                f"To reference a single matrix row alongside non-matrix questions, "
+                f"use the '{q}_r{{row_code}}' syntax instead."
+            )
+
+        # Rule 2: all items must have identical choices_i18n.rows
+        ci   = q_meta.get("choices_i18n", {})
+        rows = ci.get("rows", {}) if isinstance(ci, dict) else {}
+        if not rows:
+            raise ValueError(
+                f"row_group: question '{q}' has no choices_i18n.rows defined."
+            )
+        if first_rows is None:
+            first_rows, first_q = rows, q
+        elif rows != first_rows:
+            raise ValueError(
+                f"row_group: question '{q}' has different choices_i18n.rows "
+                f"than '{first_q}'. All items must share identical row definitions."
+            )
+
+    return first_rows  # type: ignore[return-value]
+
+
+def _compute_row_group(
+    group_cfg: dict,
+    banner_cols: list[BannerColumn],
+    df: pd.DataFrame,
+    sig_config: dict,
+    q_pos_to_meta: dict,
+) -> list[RowGroupBlock]:
+    """Compute blocks for a row_group stub entry.
+
+    Returns one RowGroupBlock per shared row (e.g. one per brand),
+    each containing one StubBlock per question item.
+    """
+    items      = group_cfg.get("items", [])
+    shared_rows = _validate_row_group(items, q_pos_to_meta)
+
+    result: list[RowGroupBlock] = []
+
+    for row_code, row_label_raw in shared_rows.items():
+        row_label  = _row_label_text(row_label_raw)
+        sub_blocks: list[StubBlock] = []
+
+        for item in items:
+            q       = item["question"]
+            q_meta  = q_pos_to_meta[q]
+            atype   = q_meta["answer_type"]
+            sub_atype = "MA" if atype == "Matrix_MA" else "SA"
+
+            ci          = q_meta.get("choices_i18n", {})
+            col_choices = ci.get("columns", {}) if isinstance(ci, dict) else {}
+
+            # Find the sub_question for this row
+            sub_meta = next(
+                (sm for sm in q_meta.get("sub_questions", {}).values()
+                 if str(sm.get("row_index", "")) == str(row_code)),
+                None,
+            )
+            if sub_meta is None:
+                continue
+
+            sub_col = sub_meta.get("label", "")
+            if sub_col not in df.columns:
+                continue
+
+            item_label = (
+                item.get("label")
+                or q_meta.get("question_i18n", {}).get("en")
+                or q_meta.get("question_i18n", {}).get("vi")
+                or q
+            )
+            req_stats = item.get("stats", ["base", "percent"])
+
+            sub_bases: dict[int, int] = {
+                i: _base_count(df[bc.mask], sub_col)
+                for i, bc in enumerate(banner_cols)
+            }
+
+            sub_rows: list[StubRow] = []
+            for stat in DEFAULT_STATS_ORDER:
+                if stat not in req_stats:
+                    continue
+                if stat == "base":
+                    sub_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(sub_bases),
+                        values={i: float(v) for i, v in sub_bases.items()},
+                    ))
+                elif stat == "percent" and col_choices:
+                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
+                        cnts: dict[int, int]   = {}
+                        pcts: dict[int, float] = {}
+                        for i, bc in enumerate(banner_cols):
+                            sub  = df[bc.mask]
+                            base = sub_bases[i]
+                            cnt  = (_code_count_mc(sub, sub_col, code)
+                                    if sub_atype == "MA"
+                                    else _code_count_sc(sub, sub_col, code))
+                            cnts[i] = cnt
+                            pcts[i] = cnt / base if base else 0.0
+                        sub_rows.append(StubRow(
+                            label=_choice_label(col_choices, code), row_type="percent",
+                            counts=cnts, values=pcts, code=code,
+                        ))
+
+            if sub_rows:
+                sub_blocks.append(StubBlock(
+                    question_code=q.upper(),
+                    question_label=item_label,
+                    answer_type=atype,
+                    rows=sub_rows,
+                ))
+
+        if sub_blocks:
+            result.append(RowGroupBlock(
+                row_label=row_label,
+                row_code=row_code,
+                sub_blocks=sub_blocks,
+            ))
+
+    return result
+
+
 def compute_table(
     stub_configs: list[dict],
     banner_cols: list[BannerColumn],
@@ -225,7 +406,7 @@ def compute_table(
     sig_config: dict,
     col_map: dict[str, str] | None = None,
     q_pos_to_meta: dict[str, dict] | None = None,
-) -> list[StubBlock]:
+) -> list[StubBlock | RowGroupBlock]:
     """Compute cross-tabulation blocks.
 
     Parameters
@@ -242,12 +423,85 @@ def compute_table(
     def _get_meta(q: str) -> dict | None:
         return q_pos_to_meta.get(q) if q_pos_to_meta else None
 
-    blocks: list[StubBlock] = []
+    blocks: list[StubBlock | RowGroupBlock] = []
     n = len(banner_cols)
 
     for sc in stub_configs:
-        q      = sc["question"]
-        q_col  = _resolve(q)            # actual df column name
+
+        # ── row_group entry ───────────────────────────────────────────────────
+        if sc.get("row_group"):
+            row_blocks = _compute_row_group(
+                sc, banner_cols, df, sig_config, q_pos_to_meta or {}
+            )
+            blocks.extend(row_blocks)
+            continue
+
+        q = sc["question"]
+
+        # ── sub-question reference: Q14_r10 syntax ────────────────────────────
+        sub_ref = _parse_sub_q_ref(q, q_pos_to_meta or {})
+        if sub_ref is not None:
+            # Treat the sub-question as a flat SA/MA question
+            sub_col   = sub_ref.get("label", q)
+            sub_atype = sub_ref.get("answer_type", "SA")
+            col_choices = sub_ref.get("choices_i18n", {})
+            req_stats = sc.get("stats", ["base", "percent"])
+
+            # Label: datatable config > parent question_i18n + row_label
+            parent_label_q = _SUB_Q_RE.match(q).group(1)  # type: ignore[union-attr]
+            parent_meta    = (q_pos_to_meta or {}).get(parent_label_q, {})
+            default_label  = (
+                (parent_meta.get("question_i18n", {}).get("en") or
+                 parent_meta.get("question_i18n", {}).get("vi") or
+                 parent_label_q)
+                + f" — {sub_ref.get('row_label', q)}"
+            )
+            q_label = sc.get("label") or default_label
+
+            if sub_col not in df.columns:
+                continue
+
+            sub_bases: dict[int, int] = {
+                i: _base_count(df[bc.mask], sub_col)
+                for i, bc in enumerate(banner_cols)
+            }
+            sub_rows: list[StubRow] = []
+            for stat in DEFAULT_STATS_ORDER:
+                if stat not in req_stats:
+                    continue
+                if stat == "base":
+                    sub_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(sub_bases),
+                        values={i: float(v) for i, v in sub_bases.items()},
+                    ))
+                elif stat == "percent" and col_choices:
+                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
+                        cnts: dict[int, int]   = {}
+                        pcts: dict[int, float] = {}
+                        for i, bc in enumerate(banner_cols):
+                            sub  = df[bc.mask]
+                            base = sub_bases[i]
+                            cnt  = (_code_count_mc(sub, sub_col, code)
+                                    if sub_atype == "MA"
+                                    else _code_count_sc(sub, sub_col, code))
+                            cnts[i] = cnt
+                            pcts[i] = cnt / base if base else 0.0
+                        sub_rows.append(StubRow(
+                            label=_choice_label(col_choices, code), row_type="percent",
+                            counts=cnts, values=pcts, code=code,
+                        ))
+            if sub_rows:
+                blocks.append(StubBlock(
+                    question_code=q.upper(),
+                    question_label=q_label,
+                    answer_type=sub_atype,
+                    rows=sub_rows,
+                ))
+            continue
+
+        # ── Regular question ──────────────────────────────────────────────────
+        q_col  = _resolve(q)
         q_meta = _get_meta(q)
 
         if q_meta is None:
@@ -265,6 +519,88 @@ def compute_table(
             or q_meta.get("label")
             or q
         )
+
+        # ── Matrix: paired mode (banner cols carry matrix_row_code or matrix_row_codes) ──
+        # Activated when banner was built via nest_banner_with_matrix_rows (banner_matrix).
+        # Instead of expanding the matrix into N sub-question blocks (one per brand),
+        # produce a SINGLE block whose rows are the choice options.
+        #
+        # Two column variants:
+        #   matrix_row_code  (str)        → single brand row: read {q_col}_r{code}
+        #   matrix_row_codes (list[str])  → grouped brands:   stack/sum across all _r{rc} cols
+        _is_paired = any(
+            bc.matrix_row_code is not None or bc.matrix_row_codes is not None
+            for bc in banner_cols
+        )
+        if atype in MATRIX_TYPES and _is_paired:
+            sub_atype   = "MA" if atype == "Matrix_MA" else "SA"
+            col_choices = choices_i18n.get("columns", {}) if isinstance(choices_i18n, dict) else {}
+
+            paired_bases: dict[int, int] = {}
+            for i, bc in enumerate(banner_cols):
+                if bc.matrix_row_code is not None:
+                    matched = f"{q_col}_r{bc.matrix_row_code}"
+                    paired_bases[i] = _base_count(df[bc.mask], matched) if matched in df.columns else 0
+                elif bc.matrix_row_codes is not None:
+                    # stacked: sum base counts across all grouped row columns
+                    paired_bases[i] = sum(
+                        _base_count(df[bc.mask], f"{q_col}_r{rc}")
+                        for rc in bc.matrix_row_codes
+                        if f"{q_col}_r{rc}" in df.columns
+                    )
+                else:
+                    paired_bases[i] = 0
+
+            p_rows: list[StubRow] = []
+            for stat in DEFAULT_STATS_ORDER:
+                if stat not in req_stats:
+                    continue
+                if stat == "base":
+                    p_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(paired_bases),
+                        values={i: float(v) for i, v in paired_bases.items()},
+                    ))
+                elif stat == "percent" and col_choices:
+                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
+                        cnts: dict[int, int]   = {}
+                        pcts: dict[int, float] = {}
+                        for i, bc in enumerate(banner_cols):
+                            base = paired_bases[i]
+                            if bc.matrix_row_code is not None:
+                                matched = f"{q_col}_r{bc.matrix_row_code}"
+                                if matched not in df.columns:
+                                    cnts[i] = 0; pcts[i] = 0.0; continue
+                                sub = df[bc.mask]
+                                cnt = (_code_count_mc(sub, matched, code)
+                                       if sub_atype == "MA"
+                                       else _code_count_sc(sub, matched, code))
+                            elif bc.matrix_row_codes is not None:
+                                # stacked: aggregate counts across all grouped row columns
+                                sub = df[bc.mask]
+                                cnt = sum(
+                                    (_code_count_mc(sub, f"{q_col}_r{rc}", code)
+                                     if sub_atype == "MA"
+                                     else _code_count_sc(sub, f"{q_col}_r{rc}", code))
+                                    for rc in bc.matrix_row_codes
+                                    if f"{q_col}_r{rc}" in df.columns
+                                )
+                            else:
+                                cnt = 0
+                            cnts[i] = cnt
+                            pcts[i] = cnt / base if base else 0.0
+                        p_rows.append(StubRow(
+                            label=_choice_label(col_choices, code), row_type="percent",
+                            counts=cnts, values=pcts, code=code,
+                        ))
+            if p_rows:
+                blocks.append(StubBlock(
+                    question_code  = q.upper(),
+                    question_label = q_label,
+                    answer_type    = atype,
+                    rows           = p_rows,
+                ))
+            continue
 
         # ── Matrix: expand into one block per sub-question (row) ─────────────
         if atype in MATRIX_TYPES:

@@ -26,12 +26,14 @@ def _letter(i: int) -> str:
 
 @dataclass
 class BannerColumn:
-    group_label:    str        # e.g. "Q1 x Q2 x Q3" — sig test grouping key
-    subgroup_label: str        # leaf/detail label, always shown in DETAIL row
-    letter:         str        # A, B, C … resets when outermost level changes
-    mask:           pd.Series
-    is_total:       bool       = False   # True → excluded from sig test
-    level_labels:   list[str]  = field(default_factory=list)
+    group_label:     str        # e.g. "Q1 x Q2 x Q3" — sig test grouping key
+    subgroup_label:  str        # leaf/detail label, always shown in DETAIL row
+    letter:          str        # A, B, C … resets when outermost level changes
+    mask:            pd.Series
+    is_total:        bool       = False   # True → excluded from sig test
+    level_labels:    list[str]  = field(default_factory=list)
+    matrix_row_code:  str | None       = None  # single row → paired mode
+    matrix_row_codes: list[str] | None = None  # multiple rows → stacked paired mode
     # Header display rules:
     # level_labels = []                 → plain: group(5) / detail(6)
     # level_labels = ["A"]              → 2-level: group(5) / A(6) / detail(7)
@@ -165,6 +167,45 @@ def build_banner(
                 letter_idx += 1
             continue
 
+        # ── Matrix rows as banner columns (via "use_matrix_rows") ────────────────
+        # Format:
+        #   { "label": "Brand", "question": "Q13_1", "use_matrix_rows": true }
+        # Generates one BannerColumn per row in choices_i18n.rows.
+        # Mask: respondents where Q13_1_r{code} is not NaN (have any response for that row).
+        if entry.get("use_matrix_rows"):
+            q_ref = entry["question"]
+            q     = _resolve(q_ref)
+            meta  = None
+            if q_pos_to_meta:
+                meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(q)
+
+            rows: dict = {}
+            if meta:
+                rows = meta.get("choices_i18n", {}).get("rows", {})
+
+            letter_idx = 0
+            for row_code, label_raw in rows.items():
+                if isinstance(label_raw, dict):
+                    row_label = label_raw.get("vi") or label_raw.get("en") or row_code
+                else:
+                    row_label = str(label_raw)
+
+                col_name = f"{q}_r{row_code}"
+                if col_name in df.columns:
+                    mask = df[col_name].notna()
+                else:
+                    mask = pd.Series(False, index=df.index)
+
+                columns.append(BannerColumn(
+                    group_label=group_label,
+                    subgroup_label=row_label,
+                    letter=_letter(letter_idx),
+                    mask=mask,
+                    is_total=False,
+                ))
+                letter_idx += 1
+            continue
+
         # ── Regular banner / manual cross-tab (via "groups" key) ───────────────
         # Supports:
         #   - Single-question banner:  entry has "question" + groups with value/values
@@ -213,3 +254,104 @@ def build_banner(
             letter_idx += 1
 
     return columns
+
+
+def nest_banner_with_matrix_rows(
+    base_columns: list[BannerColumn],
+    matrix_question: str,
+    df: pd.DataFrame,
+    q_pos_to_meta: dict | None = None,
+    col_map: dict | None = None,
+    groups: list[dict] | None = None,
+) -> list[BannerColumn]:
+    """Expand each base banner column into sub-columns — one per matrix row (or group).
+
+    Parameters
+    ----------
+    groups
+        Optional explicit group list. Each entry is a dict with:
+          - ``label``     : display label for the column header
+          - ``row_code``  : single row code  (enables paired-matrix stub mode)
+          - ``row_codes`` : list of row codes to union (mask = any row not null;
+                            paired-matrix stub mode is disabled for these columns)
+        When omitted, every row in ``choices_i18n.rows`` becomes its own column.
+
+    Header levels produced
+    ----------------------
+    - Total column  → group / brand        [level_labels=[]]
+    - Other columns → group / sub-group / brand  [level_labels=[sub-group]]
+
+    ``matrix_row_code`` is set only for single-row columns; multi-row (grouped)
+    columns get ``matrix_row_code=None`` and fall back to standard stub expansion.
+    """
+
+    def _resolve(q: str) -> str:
+        return col_map[q] if col_map and q in col_map else q
+
+    q    = _resolve(matrix_question)
+    meta = None
+    if q_pos_to_meta:
+        meta = q_pos_to_meta.get(matrix_question) or q_pos_to_meta.get(q)
+
+    if not meta:
+        return base_columns
+
+    rows: dict = meta.get("choices_i18n", {}).get("rows", {})
+
+    # ── Build brand_items as list of dicts ───────────────────────────────────
+    # Each dict: { label, mask, row_code (single), row_codes (grouped) }
+    brand_items: list[dict] = []
+
+    if groups:
+        for grp in groups:
+            label = grp["label"]
+            if "row_code" in grp:
+                rc       = str(grp["row_code"])
+                col_name = f"{q}_r{rc}"
+                mask     = df[col_name].notna() if col_name in df.columns \
+                           else pd.Series(False, index=df.index)
+                brand_items.append({"label": label, "mask": mask,
+                                    "row_code": rc, "row_codes": None})
+            else:
+                rcs  = [str(c) for c in grp.get("row_codes", [])]
+                mask = pd.Series(False, index=df.index)
+                for rc in rcs:
+                    col_name = f"{q}_r{rc}"
+                    if col_name in df.columns:
+                        mask = mask | df[col_name].notna()
+                brand_items.append({"label": label, "mask": mask,
+                                    "row_code": None, "row_codes": rcs})
+    else:
+        if not rows:
+            return base_columns
+        for row_code, label_raw in rows.items():
+            label    = label_raw.get("vi") or label_raw.get("en") or row_code \
+                       if isinstance(label_raw, dict) else str(label_raw)
+            col_name = f"{q}_r{row_code}"
+            mask     = df[col_name].notna() if col_name in df.columns \
+                       else pd.Series(False, index=df.index)
+            brand_items.append({"label": label, "mask": mask,
+                                "row_code": row_code, "row_codes": None})
+
+    # ── Nest each base column × brand_items ───────────────────────────────────
+    result: list[BannerColumn] = []
+
+    for col in base_columns:
+        level_prefix: list[str] = [] if col.is_total \
+                                   else list(col.level_labels) + [col.subgroup_label]
+        letter_idx = 0
+        for bi in brand_items:
+            combined_mask = col.mask & bi["mask"]
+            result.append(BannerColumn(
+                group_label      = col.group_label,
+                subgroup_label   = bi["label"],
+                letter           = _letter(letter_idx),
+                mask             = combined_mask,
+                is_total         = False,
+                level_labels     = level_prefix,
+                matrix_row_code  = bi["row_code"],
+                matrix_row_codes = bi["row_codes"],
+            ))
+            letter_idx += 1
+
+    return result

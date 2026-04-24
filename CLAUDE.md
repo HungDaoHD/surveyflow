@@ -14,24 +14,34 @@ This project uses the **surveyflow** Python package to process survey data from 
 
 ---
 
+## ⚠️ Confirm before acting — ALWAYS
+
+Before executing **any** of the following actions, summarize what Claude is about to do and ask user to confirm:
+
+| Action | Confirm prompt example |
+|---|---|
+| Run pipeline | "Tôi sẽ chạy pipeline vX với config hiện tại. Bạn xác nhận chạy không?" |
+| Modify `datatable.json` | "Tôi sẽ sửa datatable.json: [mô tả thay đổi]. Bạn xác nhận không?" |
+| Fetch data from QMe | "Tôi sẽ fetch lại data từ QMe và ghi đè input files. Bạn xác nhận không?" |
+
+**Rules:**
+- Always confirm **before** acting, never after
+- List all changes clearly so user knows exactly what will happen
+- If user says "yes / ok / xác nhận / làm đi / chạy đi" → proceed
+- If user says "no / thôi / đổi lại" → stop and ask what to change instead
+- Exception: read-only actions (reading files, searching, checking version) do NOT need confirmation
+
+> Note: Push GitHub / publish PyPI là việc của developer — không thuộc phạm vi hướng dẫn này.
+
+---
+
 ## Environment setup (check once at start of every session)
 
-Before doing anything, verify the environment is ready:
-
 ```bash
-# 1. Check surveyflow installed
 python -c "import surveyflow; print(surveyflow.__version__)"
 ```
 
-If the command fails → install it:
-```bash
-pip install surveyflow
-```
-
-If running from a local dev folder (editable install):
-```bash
-pip install -e .
-```
+If fails → `pip install surveyflow` (or `pip install -e .` for local dev).
 
 ---
 
@@ -44,7 +54,8 @@ search_surveys(query="SURVEY_NAME")
 Note the `survey_id`.
 
 ### Step 2 — Fetch and save MCP data
-**First, check if `output/SURVEY_NAME/input/` already exists and contains `definition.json` + `rows_page_*.json`.**
+
+**First, check if `output/SURVEY_NAME/mcp/` already exists and contains `definition.json` + `rows_page_*.json`.**
 
 If files exist → ask user:
 > "Input data đã có sẵn (`definition.json`, `rows_page_1.json`, …). Bạn muốn dùng data cũ hay fetch lại data mới từ QMe?"
@@ -54,9 +65,9 @@ If files exist → ask user:
 
 If files do not exist → fetch immediately (no need to ask):
 ```
-get_survey_definition(survey_id)        →  save to output/SURVEY_NAME/input/definition.json
-get_survey_rows(survey_id, offset=0)    →  save to output/SURVEY_NAME/input/rows_page_1.json
-get_survey_rows(survey_id, offset=200)  →  save to output/SURVEY_NAME/input/rows_page_2.json
+get_survey_definition(survey_id)        →  save to output/SURVEY_NAME/mcp/definition.json
+get_survey_rows(survey_id, offset=0)    →  save to output/SURVEY_NAME/mcp/rows_page_1.json
+get_survey_rows(survey_id, offset=200)  →  save to output/SURVEY_NAME/mcp/rows_page_2.json
 ... keep fetching until has_more = false
 ```
 
@@ -64,49 +75,123 @@ get_survey_rows(survey_id, offset=200)  →  save to output/SURVEY_NAME/input/ro
 > Dùng Write tool để ghi file — nội dung là `json.dumps(result, ensure_ascii=False, indent=2)`.
 > Không dùng bash pipe cho MCP output.
 
-### Step 3 — Create datatable.json
-Create `output/SURVEY_NAME/datatable.json` based on:
-- The survey definition (question positions, types, labels)
-- User's request (if specified)
-- If user does not specify → auto-generate (see Auto-generate rules below)
+> ⚠️ **Path nhất quán:** Trước khi lưu file đầu tiên, xác định base directory bằng:
+> ```python
+> import os; BASE = os.getcwd()
+> ```
+> Dùng `BASE` làm gốc cho **tất cả** các path trong cùng session.
 
-### Step 4 — Run pipeline
+### Step 3 — Run ingestion (generate rawdata + metadata)
 
-**Option A** — nếu `run_pipeline.py` có sẵn trong project root:
+**Check if `output/SURVEY_NAME/data/rawdata.csv` already exists.**
+
+If exists → skip this step (data already generated).
+
+If not exists → run ingestion. Since `datatable/datatable.json` doesn't exist yet,
+the pipeline automatically skips the table step and only generates `data/`:
+
 ```bash
 python run_pipeline.py \
-  --input-dir        output/SURVEY_NAME/input \
-  --output-dir       output/SURVEY_NAME \
-  --version          v1 \
-  --datatable-config output/SURVEY_NAME/datatable.json
+  --mcp-dir    output/SURVEY_NAME/mcp \
+  --output-dir output/SURVEY_NAME
 ```
 
-**Option B** — nếu không có `run_pipeline.py` (fresh environment), chạy inline:
+This produces:
+- `output/SURVEY_NAME/data/rawdata.csv`
+- `output/SURVEY_NAME/data/metadata.json`
+
+> **Why separate ingestion first?**
+> `metadata.json` contains the actual question labels, choice codes, and matrix row/column
+> definitions needed to build a correct `datatable.json`. Ask datatable questions AFTER
+> ingestion so you can reference real choice codes from metadata.
+
+### Step 4 — Create datatable.json
+
+**Nếu user đã chỉ định rõ yêu cầu** → tạo `datatable/datatable.json` theo yêu cầu đó.
+
+**Nếu user chưa chỉ định** → KHÔNG auto-generate. Hỏi lần lượt 3 câu sau (hỏi từng câu, chờ user trả lời rồi mới hỏi câu tiếp):
+
+**Câu hỏi 1 — Loại bảng:**
+> "Bạn muốn chạy bảng theo dạng nào?
+> 1. Count only
+> 2. Percentage only
+> 3. Percentage + Sig test (90% & 95%)
+> 4. Tất cả (Count + Percentage + Sig test)"
+
+→ Tạo `tables` trong datatable.json theo đúng lựa chọn. Không thêm sheet nào ngoài những gì user chọn.
+
+**Câu hỏi 2 — Banner (header):**
+> Hiển thị danh sách các câu SA/MA từ metadata.json, ví dụ:
+> "Banner gồm những câu nào? (mặc định luôn có Total)
+> Ví dụ: Q1 (Age), Q2 (Income), Q3 (Baby Age)
+> Nhập số câu hoặc tên, cách nhau bằng dấu phẩy:"
+
+→ Tạo `banner` với Total + các câu user chọn. Lấy choice codes từ `metadata.json`.
+
+**Câu hỏi 3 — Stub:**
+> Hiển thị danh sách tất cả câu codeable (SA, MA, Matrix) từ metadata.json:
+> "Stub gồm những câu nào?
+> - Nhập 'all' để lấy tất cả
+> - Hoặc nhập số câu cách nhau bằng dấu phẩy: Q1, Q5, Q8, ..."
+
+→ Nếu "all": thêm tất cả SA/MA/Matrix theo thứ tự position, stats mặc định `["base", "percent"]`
+→ Nếu chỉ định cụ thể: chỉ thêm các câu đó theo đúng thứ tự user nhập
+
+### Step 5 — Run pipeline (table-only)
+
+Since `data/` already exists from Step 3, always run table-only:
+
+```bash
+python run_pipeline.py \
+  --output-dir output/SURVEY_NAME \
+  --version    v1
+```
+
+**Force re-ingestion** (after fetching new data from QMe):
+```bash
+python run_pipeline.py \
+  --mcp-dir         output/SURVEY_NAME/mcp \
+  --output-dir      output/SURVEY_NAME \
+  --version         vX \
+  --force-ingestion
+```
+
+> ⚠️ **NEVER recreate or rewrite `run_pipeline.py`** — it is always available.
+> - Local dev (editable install): use `python run_pipeline.py`
+> - PyPI install: use `surveyflow-run` (same arguments)
+
+Nếu không dùng được `run_pipeline.py` (môi trường web/sandbox), chạy inline:
 ```python
-import json
-from pathlib import Path
+import json, os, pathlib
 from surveyflow import Pipeline, PipelineConfig
 
-input_dir  = Path("output/SURVEY_NAME/input")
-output_dir = Path("output/SURVEY_NAME")
+BASE       = pathlib.Path(os.getcwd())
+output_dir = BASE / "output" / "SURVEY_NAME"
+data_dir   = output_dir / "data"
 
-with open(input_dir / "definition.json", encoding="utf-8") as f:
-    definition = json.load(f)
-
-rows_pages = [
-    json.load(open(p, encoding="utf-8"))
-    for p in sorted(input_dir.glob("rows_page_*.json"))
-]
-
+# Ingestion-only (no datatable_config → table step is skipped):
+mcp_dir    = output_dir / "mcp"
+definition = json.load(open(mcp_dir / "definition.json", encoding="utf-8"))
+rows_pages = [json.load(open(p, encoding="utf-8")) for p in sorted(mcp_dir.glob("rows_page_*.json"))]
 result = Pipeline(PipelineConfig(
-    definition       = definition,
-    rows_pages       = rows_pages,
-    output_dir       = str(output_dir),
-    version          = "v1",
-    datatable_config = "output/SURVEY_NAME/datatable.json",
+    definition   = definition,
+    rows_pages   = rows_pages,
+    output_dir   = str(output_dir),
+    data_dir     = str(data_dir),
 )).run()
+print("rawdata  :", result["rawdata_path"])
+print("metadata :", result["metadata_path"])
 
-print(result["datatable_path"])
+# Table-only (after datatable.json is created):
+result = Pipeline(PipelineConfig(
+    output_dir       = str(output_dir),
+    data_dir         = str(data_dir),
+    skip_ingestion   = True,
+    version          = "v1",
+    datatable_config = str(output_dir / "datatable" / "datatable.json"),
+)).run()
+print("datatable:", result["datatable_path"])
+print("rows     :", result["rawdata"].shape[0])
 ```
 
 ---
@@ -121,88 +206,161 @@ When user says things like:
 - *"thêm T2B cho tất cả câu singlechoice"*
 
 **Always:**
-1. Read current `output/SURVEY_NAME/datatable.json`
+1. Read current `output/SURVEY_NAME/datatable/datatable.json`
 2. Modify it according to user request
 3. Save `datatable.json`
-4. Run pipeline with new version (Option A or B above, increment version v1→v2→v3…)
+4. Run pipeline with new version (increment v1→v2→v3…) — table-only, no `--mcp-dir` needed
 
 ---
 
 ## datatable.json structure
 
+`datatable.json` is an **array** — mỗi item là 1 table config độc lập, sinh ra các sheets riêng trong cùng 1 file xlsx.
+
 ```json
-{
-  "title": "SURVEY_NAME - Data Table",
-  "significance_test": {
-    "enabled": true,
-    "levels": [90, 95],
-    "method": "independent"
-  },
-  "banner": [
-    { "label": "Total", "filter": null },
-    {
-      "label": "Gender",
-      "question": "Q10",
-      "groups": [
-        { "label": "Male",   "value": 2 },
-        { "label": "Female", "value": 1 }
-      ]
+[
+  {
+    "title": "SURVEY_NAME - Data Table",
+    "sub_title": "General",
+    "significance_test": {
+      "enabled": true,
+      "levels": [90, 95],
+      "method": "independent"
     },
-    {
-      "label": "Age Group",
-      "question": "Q12",
-      "groups": [
-        { "label": "Under 30", "values": [3, 4, 5] },
-        { "label": "30 - 39",  "values": [1, 2]    },
-        { "label": "40+",      "values": [6, 7, 8]  }
-      ]
-    }
-  ],
-  "stub": [
-    { "question": "Q10", "label": "Gender",     "stats": ["base", "percent"] },
-    { "question": "Q36", "label": "Food Freq",  "stats": ["base", "percent", "t2b", "b2b", "mean", "std", "se"] }
-  ],
-  "tables": [
-    { "sheet": "Count",            "cell_content": "count",      "show_sig": false },
-    { "sheet": "Percentage",       "cell_content": "percentage", "show_sig": false },
-    { "sheet": "Percentage & Sig", "cell_content": "percentage", "show_sig": true  }
-  ]
-}
+    "banner": [
+      { "label": "Total", "filter": null },
+      {
+        "label": "Gender",
+        "question": "Q10",
+        "groups": [
+          { "label": "Male",   "value": 2 },
+          { "label": "Female", "value": 1 }
+        ]
+      }
+    ],
+    "stub": [
+      { "question": "Q10", "label": "Gender",    "stats": ["base", "percent"] },
+      { "question": "Q36", "label": "Food Freq", "stats": ["base", "percent", "t2b", "b2b", "mean"] }
+    ],
+    "tables": [
+      { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
+      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true },
+      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "enabled": true }
+    ]
+  }
+]
 ```
+
+Sheet tab name = `{sub_title} - {sheet}` → ví dụ `"General - Count"`, `"General - Pct"`, `"General - Sig"`.
 
 ### Banner rules
 - Always include `{ "label": "Total", "filter": null }` as first entry
 - `value` = single integer code from rawdata.csv
 - `values` (plural) = list of codes to group together (e.g. age ranges)
 - **Question reference: use the question label** (e.g. `"Q10"`) — this is the `label` field in metadata.json
-  - `q{position}` format (e.g. `"q10"`) is also accepted for backward compatibility
-- To find choice codes → read `output/SURVEY_NAME/vX/metadata.json` → find the question by label → inspect `choices_i18n`
+- To find choice codes → read `output/SURVEY_NAME/data/metadata.json` → find question → inspect `choices_i18n`
 - **MA questions are supported as banner** — each code becomes a column; respondents can appear in multiple columns
+
+### banner_matrix — Matrix rows as nested banner columns
+
+Use `banner_matrix` to add a matrix question's rows (e.g. brands) as the innermost level of every banner column. When active, stub matrix questions switch to **paired mode** — instead of expanding by sub-question, they show choice distributions matched to each brand column.
+
+```json
+"banner_matrix": {
+  "label": "Brand",
+  "question": "Q17"
+}
+```
+
+Without `groups`: all rows from `choices_i18n.rows` become individual columns.
+
+With explicit `groups`:
+```json
+"banner_matrix": {
+  "label": "Brand",
+  "question": "Q17",
+  "groups": [
+    { "label": "International brands", "row_codes": ["1","2","3","4","5","6"] },
+    { "label": "Castrol",  "row_code": "1"  },
+    { "label": "Shell",    "row_code": "2"  },
+    { "label": "SK ZIC",   "row_code": "10" },
+    { "label": "GS KIXX",  "row_code": "11" }
+  ]
+}
+```
+
+**Groups rules:**
+- `row_code` (string): single brand row → paired mode reads `{q_col}_r{code}` per column
+- `row_codes` (list): grouped brands → stacked mode sums counts across all `{q_col}_r{rc}` columns
+- Mix of both is allowed in the same `groups` array
+
+**Header levels produced:**
+- Total column + each brand: `Total / Brand` (2 levels)
+- Store Type column + each brand: `Store Type / Sub-group / Brand` (3 levels)
 
 ### Stub rules
 - One entry per question
 - `stats` options: `"base"`, `"percent"`, `"t2b"`, `"b2b"`, `"mean"`, `"std"`, `"se"`
-- Supported answer types: `SA` (singlechoice), `MA` (multiplechoice), `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`
+- Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`
   - Matrix questions automatically expand into one block per row (sub-question)
+  - When `banner_matrix` is active, matrix questions use paired mode instead
 - Excluded automatically: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
-- **Stub order follows datatable.json** — the pipeline outputs questions in the order they appear in `stub`
-  - Auto-generate sorts by position; after that, Claude must preserve the user's order
+- **Stub order follows datatable.json** — pipeline outputs questions in the order they appear
+
+#### row_group — nhóm matrix questions theo shared row headers
+
+Dùng `row_group: true` khi muốn nhóm nhiều câu matrix có chung `choices_i18n.rows` (exact match). Pipeline render 1 section header cho mỗi row label, với sub-blocks cho từng câu bên dưới.
+
+```json
+{
+  "row_group": true,
+  "items": [
+    { "question": "Q13_1", "label": "Motorbike oil — brands", "stats": ["base"] },
+    { "question": "Q13_2", "label": "4-Wheel oil — brands",   "stats": ["base"] },
+    { "question": "Q17",   "label": "Distributor satisfaction","stats": ["base", "percent"] }
+  ]
+}
+```
+
+**Rules:**
+1. Tất cả items phải là matrix questions (`Matrix_SA`, `Matrix_MA`, `Matrix_NUM`)
+2. Tất cả items phải có cùng `choices_i18n.rows` (exact match)
+3. Không được mix non-matrix questions vào trong `row_group`
+
+#### Sub-question reference — Q{label}_r{n}
+
+Để lấy 1 row cụ thể của matrix làm flat stub (ví dụ: chỉ 1 brand):
+
+```json
+{ "question": "Q17_r10",      "label": "SK ZIC — satisfaction",    "stats": ["base", "percent"] },
+{ "question": "Q14_Freq_r10", "label": "SK ZIC — visit frequency", "stats": ["base", "percent"] }
+```
+
+- `r10` = sub-question có `row_index == 10` trong metadata
+- Dùng được với mọi matrix type, ngoài `row_group`
 
 ### Tables rules
-- Always keep all 3 sheets: Count, Percentage, Percentage & Sig
-- Do not modify `tables` unless user explicitly requests it
+- Khi khởi tạo lần đầu: tạo đúng theo lựa chọn của user ở Step 4
+- Sau khi đã có datatable.json: không thay đổi `tables` trừ khi user yêu cầu
+- `enabled: false` → sheet đó bị bỏ qua khi chạy
+- Mapping lựa chọn → sheets:
+  - Count only → `[{ "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true }]`
+  - Pct only   → `[{ "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true }]`
+  - Sig        → `[{ "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "enabled": true }]`
+  - Tất cả    → cả 3 sheets: Count + Pct + Sig
 
 ---
 
 ## Auto-generate datatable.json rules
-When user does not specify — use this logic:
+> ⚠️ **Không dùng auto-generate khi khởi tạo lần đầu.** Luôn hỏi user theo Step 4.
+> Auto-generate chỉ dùng khi user nói rõ: *"tự động tạo"* hoặc *"auto"*.
 
 **Banner:** Pick singlechoice (SA) questions that look demographic:
 - Gender, Age, Location, Income, Marital status, Occupation
 - Max 4-5 banner groups + Total
 
 **Stub:** Include all codeable questions sorted by position:
-- `SA` (singlechoice), `MA` (multiplechoice), `Matrix_SA`, `Matrix_MA`
+- `SA`, `MA`, `Matrix_SA`, `Matrix_MA`
 - Default stats: `["base", "percent"]`
 - Skip: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
 
@@ -211,24 +369,22 @@ When user does not specify — use this logic:
 ## Output structure
 ```
 output/SURVEY_NAME/
-├── input/
-│   ├── definition.json       ← from get_survey_definition (fetch once)
-│   ├── rows_page_1.json      ← from get_survey_rows (fetch once)
+├── mcp/                      ← MCP raw files (fetched from QMe)
+│   ├── definition.json
+│   ├── rows_page_1.json
 │   └── rows_page_2.json
-├── datatable.json            ← Claude manages this file
-├── v1/                       ← first run
+├── data/                     ← rawdata.csv + metadata.json (generated from mcp/, reused)
 │   ├── rawdata.csv
-│   ├── metadata.json
+│   └── metadata.json
+├── datatable/                ← Claude manages this file
+│   └── datatable.json
+├── v1/                       ← datatable.xlsx only
 │   └── datatable.xlsx
 ├── v2/                       ← after user requests changes
 │   └── datatable.xlsx
 └── v3/
     └── datatable.xlsx
 ```
-
-> **Note:** `input/` data is fetched once and reused across all versions.
-> **Always ask before re-fetching:** "Input data đã có sẵn (`definition.json`, `rows_page_*.json`). Bạn muốn dùng data cũ hay fetch lại data mới từ QMe?"
-> Only re-fetch if user confirms yes.
 
 ---
 
@@ -241,8 +397,13 @@ output/SURVEY_NAME/
 | "thêm mean std cho Q36" | Add `"mean"`, `"std"` to Q36's `stats` |
 | "thêm tất cả câu vào stub" | Add all codeable questions to `stub` |
 | "tắt sig test" | Set `significance_test.enabled = false` |
-| "chỉ chạy 1 sheet percentage" | Modify `tables` to keep only Percentage sheet |
-| "refresh data / lấy data mới" | Re-fetch MCP rows → overwrite `input/rows_page_*.json` → re-run |
+| "chỉ chạy 1 sheet percentage" | Modify `tables` to keep only Pct sheet |
+| "nhóm Q13/Q14/Q17 theo brand" | Dùng `row_group: true` với các câu đó trong stub |
+| "thêm SK ZIC riêng cho Q17" | Thêm `Q17_r{n}` sub-question ref vào stub |
+| "brand làm header, tất cả brands" | Thêm `banner_matrix: { question: "QX" }` (không có groups) |
+| "brand header, Castrol và Shell riêng, nhóm International" | Thêm `banner_matrix` với `groups` mix `row_code`/`row_codes` |
+| "bảng bình thường + bảng matrix brand" | Tạo 2 items trong array: 1 không có banner_matrix, 1 có |
+| "refresh data / lấy data mới" | Re-fetch MCP rows → overwrite `mcp/rows_page_*.json` → re-run với `--force-ingestion` |
 
 ---
 

@@ -11,8 +11,8 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 from surveyflow.core.base import Step
-from surveyflow.steps.table.banner_builder import BannerColumn, build_banner
-from surveyflow.steps.table.table_generator import StubBlock, StubRow, compute_table
+from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows
+from surveyflow.steps.table.table_generator import StubBlock, StubRow, RowGroupBlock, compute_table
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ def _write_sheet(
     config: dict,
     table_cfg: dict,
     banner_cols: list[BannerColumn],
-    blocks: list[StubBlock],
+    blocks: list[StubBlock | RowGroupBlock],
 ) -> None:
     cell_content = table_cfg.get("cell_content", "percentage")   # "count" | "percentage"
     show_sig     = table_cfg.get("show_sig", False)
@@ -263,47 +263,43 @@ def _write_sheet(
 
     # ── Stub rows ────────────────────────────────────────────────────
     cur = DATA_START
-    for block in blocks:
-        if not block.rows:
-            continue
 
-        # Separate base row from the rest
+    def _write_block(block: StubBlock, cur: int, is_sub: bool = False) -> int:
+        """Write one StubBlock. Returns updated cur row number."""
+        if not block.rows:
+            return cur
+
         base_row  = next((r for r in block.rows if r.row_type == "base"), None)
         data_rows = [r for r in block.rows if r.row_type != "base"]
 
-        # ── Question header row (doubles as Base row) ────────────────
-        # thick_bottom separates this header from its answer-option rows
+        # Question header row (doubles as Base row)
+        hdr_fill = _F_STAT if is_sub else _F_MID
+        hdr_font = _BOLD if is_sub else _WHITE_BOLD
         _set(ws, cur, 1, block.question_code,
-             font=_WHITE_BOLD, fill=_F_MID, align=_C,
-             border=_brd(thick_bottom=True))
+             font=hdr_font, fill=hdr_fill, align=_C, border=_brd(thick_bottom=True))
         _set(ws, cur, 2, f"{block.question_label} ({block.answer_type})",
-             font=_WHITE_BOLD, fill=_F_MID, align=_L,
-             border=_brd(thick_bottom=True))
-        _set(ws, cur, 3, "Code",                           # code col header
-             font=_WHITE_BOLD, fill=_F_MID, align=_C,
-             border=_brd(thick_bottom=True))
-        _set(ws, cur, 4, "Base" if base_row else "",   # label col
-             font=_WHITE_BOLD, fill=_F_MID, align=_L,
-             border=_brd(thick_bottom=True))
+             font=hdr_font, fill=hdr_fill, align=_L, border=_brd(thick_bottom=True))
+        _set(ws, cur, 3, "Code",
+             font=hdr_font, fill=hdr_fill, align=_C, border=_brd(thick_bottom=True))
+        _set(ws, cur, 4, "Base" if base_row else "",
+             font=hdr_font, fill=hdr_fill, align=_L, border=_brd(thick_bottom=True))
 
         for i, slot in enumerate(slots):
             col   = DATA_COL + i
             thick = slot["first_in_group"] and i > 0
-
             if slot["kind"] == "sig" or base_row is None:
-                _set(ws, cur, col, fill=_F_MID, border=_brd(thick, thick_bottom=True))
+                _set(ws, cur, col, fill=hdr_fill, border=_brd(thick, thick_bottom=True))
                 continue
-
             bc_idx = slot["bc_index"]
             val    = int(base_row.counts.get(bc_idx, 0))
             _set(ws, cur, col, val,
-                 font=_WHITE_BOLD, fill=_F_MID,
+                 font=hdr_font, fill=hdr_fill,
                  align=_R, border=_brd(thick, thick_bottom=True), num_fmt="0")
 
         ws.row_dimensions[cur].height = 17
         cur += 1
 
-        # ── Data rows ────────────────────────────────────────────────
+        # Data rows
         n_data = len(data_rows)
         for row_idx, stub_row in enumerate(data_rows):
             r           = cur
@@ -322,11 +318,9 @@ def _write_sheet(
                 _NORMAL
             )
 
-            # cols A & B — empty placeholder cells
             _set(ws, r, 1, border=_brd(thick_bottom=is_last_row))
             _set(ws, r, 2, border=_brd(thick_bottom=is_last_row))
 
-            # col C — numeric code (percent rows only; stored as str, written as int)
             _code_val = None
             if not is_stat and not is_group and stub_row.code is not None:
                 try:
@@ -337,12 +331,10 @@ def _write_sheet(
                  font=_NORMAL, fill=_row_fill,
                  align=_C, border=_brd(thick_bottom=is_last_row))
 
-            # col D — answer/stat/group label
             _set(ws, r, 4, stub_row.label,
                  font=_lbl_font, fill=_row_fill,
                  align=_L, border=_brd(thick_bottom=is_last_row))
 
-            # data cols
             for i, slot in enumerate(slots):
                 col    = DATA_COL + i
                 bc_idx = slot["bc_index"]
@@ -358,7 +350,6 @@ def _write_sheet(
                         _set(ws, r, col, border=_brd(False, thick_bottom=is_last_row))
                     continue
 
-                # mean/std/se are computed stats — always use values (not counts)
                 _computed_stat = stub_row.row_type in ("mean", "std", "se")
                 raw = (
                     stub_row.values.get(bc_idx)
@@ -380,14 +371,32 @@ def _write_sheet(
                     fnt = _DARK_BOLD
 
                 _set(ws, r, col, val,
-                     font=fnt,
-                     fill=_row_fill,
-                     align=_R,
+                     font=fnt, fill=_row_fill, align=_R,
                      border=_brd(thick, thick_bottom=is_last_row),
                      num_fmt=fmt)
 
             ws.row_dimensions[r].height = 15
             cur += 1
+
+        return cur
+
+    for block in blocks:
+
+        if isinstance(block, RowGroupBlock):
+            # ── Section header row (navy, full width) ────────────────
+            last_col = DATA_COL + len(slots) - 1
+            _merge(ws, cur, 1, cur, last_col)
+            _set(ws, cur, 1, block.row_label,
+                 font=_WHITE_BOLD, fill=_F_GROUP, align=_L,
+                 border=_brd(thick_bottom=True))
+            ws.row_dimensions[cur].height = 18
+            cur += 1
+            # Sub-blocks (one per question item) — rendered with subdued header
+            for sub_block in block.sub_blocks:
+                cur = _write_block(sub_block, cur, is_sub=True)
+
+        else:
+            cur = _write_block(block, cur, is_sub=False)
 
     # freeze panes
     ws.freeze_panes = ws.cell(row=DATA_START, column=DATA_COL)
@@ -443,6 +452,19 @@ class TableStep(Step):
 
             logger.info("Building banner %s…", f"({sub_title}) " if sub_title else "")
             banner_cols = build_banner(cfg, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta)
+
+            # If "banner_matrix" is specified, nest matrix rows within each banner column
+            bm = cfg.get("banner_matrix")
+            if bm:
+                banner_cols = nest_banner_with_matrix_rows(
+                    base_columns    = banner_cols,
+                    matrix_question = bm["question"],
+                    df              = df,
+                    q_pos_to_meta   = q_pos_to_meta,
+                    col_map         = col_map,
+                    groups          = bm.get("groups"),
+                )
+
             logger.info("  → %d banner columns", len(banner_cols))
 
             logger.info("Computing table %s…", f"({sub_title}) " if sub_title else "")

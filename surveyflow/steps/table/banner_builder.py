@@ -92,13 +92,14 @@ def build_banner(
             return pd.Series(False, index=df.index)
 
     def _code_label(q_ref: str, code: int) -> str:
-        """Look up the English label for a choice code from metadata."""
+        """Look up the label for a choice code from metadata."""
         if not q_pos_to_meta:
             return str(code)
         meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref))
         if not meta:
             return str(code)
-        return meta.get("choices_i18n", {}).get(str(code), {}).get("en", str(code))
+        langs = meta.get("choices_i18n", {}).get(str(code), {})
+        return langs.get("en") or langs.get("vi") or next(iter(langs.values()), str(code))
 
     columns: list[BannerColumn] = []
 

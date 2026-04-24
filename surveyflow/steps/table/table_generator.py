@@ -192,7 +192,7 @@ def _base_count(sub: pd.DataFrame, col: str) -> int:
 
 
 def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
-    return int((sub[col] == int(code)).sum())
+    return int((pd.to_numeric(sub[col], errors="coerce") == int(code)).sum())
 
 
 def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:

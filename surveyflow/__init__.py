@@ -6,4 +6,4 @@ from surveyflow.steps.ingestion.ingestion_step import IngestionStep
 from surveyflow.steps.table.table_step import TableStep
 
 __all__ = ["Pipeline", "PipelineConfig", "IngestionStep", "TableStep"]
-__version__ = "0.4.3"
+__version__ = "0.4.4"

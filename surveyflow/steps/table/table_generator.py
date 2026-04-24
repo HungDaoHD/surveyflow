@@ -187,12 +187,22 @@ def _compute_sig_marks(
 
 # ── Count helpers ──────────────────────────────────────────────────────────────
 
+def _safe_sum(series: pd.Series) -> int:
+    """Sum a boolean series to int, safe against empty pd.StringDtype returning ''."""
+    if len(series) == 0:
+        return 0
+    try:
+        return int(series.sum())
+    except (ValueError, TypeError):
+        return 0
+
+
 def _base_count(sub: pd.DataFrame, col: str) -> int:
-    return int(sub[col].apply(lambda v: pd.notna(v) and str(v).strip() != "").sum())
+    return _safe_sum(sub[col].apply(lambda v: pd.notna(v) and str(v).strip() != ""))
 
 
 def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
-    return int((pd.to_numeric(sub[col], errors="coerce") == int(code)).sum())
+    return _safe_sum(pd.to_numeric(sub[col], errors="coerce") == int(code))
 
 
 def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
@@ -215,7 +225,7 @@ def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
                 pass
             parts.append(p)
         return code in parts
-    return int(sub[col].apply(_check).sum())
+    return _safe_sum(sub[col].apply(_check))
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

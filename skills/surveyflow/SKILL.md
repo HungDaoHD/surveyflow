@@ -97,7 +97,48 @@ python skills/surveyflow/scripts/check_choices.py output/SURVEY_NAME/data/metada
 
 **If user already specified requirements** → create `datatable/datatable.json` directly.
 
-**If not specified** → ask 3 questions sequentially:
+**If not specified** → use the **preview panel form** (preferred) or ask sequentially in chat.
+
+#### Option A — Preview panel form (recommended)
+
+Generate and show an interactive form in one shot. User selects all 3 options at once:
+
+```bash
+python tools/generate_step4_form.py \
+  output/SURVEY_NAME/data/metadata.json \
+  step4_form.html \
+  "SURVEY_NAME"
+```
+
+Then start the preview server and navigate to `step4_form.html`.
+After user submits, read the result:
+
+```javascript
+// via preview_eval:
+window.__result
+// returns: { submitted, table_type, banner, stub_mode, stub }
+```
+
+`window.__result` structure:
+```json
+{
+  "submitted": true,
+  "table_type": 4,
+  "banner": ["Q1", "Q2"],
+  "stub_mode": "all",
+  "stub": ["Q1", "Q2", "Q3", "..."]
+}
+```
+
+Table type mapping:
+- `1` → Count only
+- `2` → Percentage only
+- `3` → Percentage + Sig test
+- `4` → All (Count + Pct + Sig)
+
+#### Option B — Sequential text questions (fallback)
+
+Ask 3 questions one by one in chat when preview panel is not available:
 
 **Q1 — Table type:**
 > "Bạn muốn chạy bảng theo dạng nào?

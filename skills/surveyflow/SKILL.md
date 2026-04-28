@@ -23,6 +23,37 @@ If fails → `pip install surveyflow` (or `pip install -e .` for local dev).
 
 ---
 
+## Available tools
+
+| File | Purpose |
+|---|---|
+| `tools/generate_step4_form.py` | Generate Step 4 interactive HTML form from `metadata.json` — show in preview panel so user picks table type / banner / stub in one shot |
+| `datatable-editor.html` | Standalone visual editor for `datatable.json` — open in browser, no server needed. Chrome/Edge: save in-place; Firefox: download |
+| `skills/surveyflow/scripts/list_questions.py` | List banner-eligible or stub-eligible questions from `metadata.json` |
+| `skills/surveyflow/scripts/check_choices.py` | Print choice codes for a question (ready-to-paste banner groups snippet) |
+
+### Preview panel setup (Step 4 form)
+
+`.claude/launch.json` is git-ignored. Create it once per machine if missing:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "step4-form",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "7891"],
+      "port": 7891
+    }
+  ]
+}
+```
+
+Then use `preview_start(name="step4-form")` before showing the form.
+
+---
+
 ## Output folder structure
 
 ```

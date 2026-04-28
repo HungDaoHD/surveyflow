@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SurveyFlow — datatable.json Editor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; color: #1a1a2e; background: #f0f2f5; height: 100vh; overflow: hidden; }
+
+/* Header */
+.header { background: #16213e; color: white; padding: 0 20px; height: 52px; display: flex; align-items: center; gap: 10px; }
+.header h1 { font-size: 15px; font-weight: 600; flex: 1; letter-spacing: 0.2px; }
+.header-badge { font-size: 11px; background: #0f3460; padding: 3px 8px; border-radius: 4px; color: #8ab4f8; }
+.btn { padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: background .15s; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: #1a73e8; color: white; }
+.btn-primary:not(:disabled):hover { background: #1557b0; }
+.btn-success { background: #1e8449; color: white; }
+.btn-success:not(:disabled):hover { background: #166138; }
+.btn-secondary { background: #3d4757; color: #e0e6ef; }
+.btn-secondary:hover { background: #4a5568; }
+.btn-danger { background: #c0392b; color: white; }
+.btn-danger:hover { background: #a93226; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-xs { padding: 3px 8px; font-size: 11px; }
+
+/* Layout */
+.layout { display: flex; height: calc(100vh - 78px); }
+.sidebar { width: 210px; background: white; border-right: 1px solid #e0e4ea; overflow-y: auto; flex-shrink: 0; }
+.content { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* Status bar */
+.statusbar { height: 26px; background: white; border-top: 1px solid #e0e4ea; padding: 0 16px; display: flex; align-items: center; font-size: 11px; color: #888; gap: 16px; }
+.statusbar .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
+.statusbar.dirty .dot { background: #e67e22; }
+.statusbar.saved .dot { background: #27ae60; }
+.statusbar.dirty .msg { color: #e67e22; }
+.statusbar.saved .msg { color: #27ae60; }
+
+/* Sidebar */
+.sidebar-section { padding: 10px 14px 6px; font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: .5px; }
+.config-item { padding: 9px 14px; cursor: pointer; border-left: 3px solid transparent; }
+.config-item:hover { background: #f5f7fa; }
+.config-item.active { background: #eef4ff; border-left-color: #1a73e8; }
+.config-item .ci-name { font-size: 13px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.config-item.active .ci-name { color: #1a73e8; }
+.config-item .ci-title { font-size: 11px; color: #aaa; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-footer { padding: 10px 14px; border-top: 1px solid #e0e4ea; }
+
+/* Tabs */
+.tabs { display: flex; gap: 2px; margin-bottom: 18px; background: white; border: 1px solid #e0e4ea; border-radius: 8px; padding: 3px; width: fit-content; }
+.tab { padding: 6px 14px; border-radius: 6px; border: none; background: transparent; cursor: pointer; font-size: 13px; color: #666; transition: background .15s; white-space: nowrap; }
+.tab.active { background: #1a73e8; color: white; font-weight: 500; }
+.tab:not(.active):hover { background: #f0f2f5; }
+.tab-badge { background: #e8eaf6; color: #3949ab; padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
+.tab.active .tab-badge { background: rgba(255,255,255,.25); color: white; }
+
+/* Cards */
+.card { background: white; border-radius: 8px; border: 1px solid #e0e4ea; margin-bottom: 14px; }
+.card-header { padding: 11px 16px; border-bottom: 1px solid #e0e4ea; font-weight: 600; font-size: 13px; color: #222; display: flex; align-items: center; justify-content: space-between; }
+.card-header .ch-left { display: flex; align-items: center; gap: 8px; }
+.card-body { padding: 16px; }
+
+/* Forms */
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-end; }
+.form-group { flex: 1; }
+.form-group:last-child { margin-bottom: 0; }
+label.field-label { font-size: 11px; color: #777; display: block; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+input[type=text], input[type=number], select, textarea {
+  width: 100%; padding: 7px 10px; border: 1px solid #dde1e7; border-radius: 6px;
+  font-size: 13px; outline: none; background: white; color: #222; font-family: inherit;
+}
+input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.1); }
+
+/* Toggle switch */
+.toggle-wrap { display: flex; align-items: center; gap: 10px; }
+.toggle { position: relative; display: inline-block; width: 38px; height: 21px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 21px; transition: .2s; }
+.toggle-slider:before { content: ""; position: absolute; height: 15px; width: 15px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.toggle input:checked + .toggle-slider { background: #1a73e8; }
+.toggle input:checked + .toggle-slider:before { transform: translateX(17px); }
+.toggle-label { font-size: 13px; color: #555; }
+
+/* Stats chips — use :has() for auto-style */
+.stats-grid { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.stat-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1.5px solid #dde1e7; border-radius: 20px; cursor: pointer; font-size: 12px; user-select: none; color: #555; transition: all .12s; }
+.stat-chip input[type=checkbox] { width: 12px; height: 12px; cursor: pointer; accent-color: #1a73e8; }
+.stat-chip:has(input:checked) { background: #eef4ff; border-color: #1a73e8; color: #1a73e8; font-weight: 600; }
+
+/* Reorder buttons */
+.reorder-btns { display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+.reorder-btn { background: none; border: 1px solid #dde1e7; border-radius: 4px; width: 22px; height: 18px; cursor: pointer; font-size: 10px; color: #888; display: flex; align-items: center; justify-content: center; }
+.reorder-btn:not(:disabled):hover { background: #f0f2f5; border-color: #aaa; }
+.reorder-btn:disabled { opacity: .3; cursor: not-allowed; }
+
+/* Banner items */
+.banner-item { border: 1px solid #e0e4ea; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: #fafbfc; }
+.banner-item-row { display: flex; align-items: center; gap: 8px; margin-bottom: 0; }
+.type-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; }
+.badge-total { background: #fff8e1; color: #f57f17; border: 1px solid #ffe082; }
+.badge-question { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+.banner-groups-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; }
+.banner-group-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 6px; background: white; border: 1px solid #e8eaed; border-radius: 6px; padding: 8px; }
+
+/* Stub items */
+.stub-item { border: 1px solid #e0e4ea; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: #fafbfc; }
+.stub-item.row-group { border-left: 3px solid #9c27b0; }
+.stub-row { display: flex; gap: 8px; align-items: flex-start; }
+
+/* Table sheets */
+.sheet-row { display: flex; gap: 10px; align-items: flex-end; border: 1px solid #e0e4ea; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; background: #fafbfc; }
+.sheet-row.disabled-row { opacity: .5; }
+
+/* Empty state */
+.empty-state { text-align: center; padding: 32px 16px; color: #aaa; }
+.empty-state .es-icon { font-size: 40px; margin-bottom: 10px; }
+.empty-state .es-msg { font-size: 13px; }
+
+/* Welcome screen */
+.welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; }
+.welcome-icon { font-size: 72px; margin-bottom: 20px; }
+.welcome h2 { font-size: 20px; color: #333; margin-bottom: 8px; }
+.welcome p { color: #888; margin-bottom: 24px; font-size: 14px; }
+
+/* Raw JSON */
+.raw-textarea { width: 100%; height: calc(100vh - 160px); font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; padding: 14px; border: 1px solid #dde1e7; border-radius: 8px; resize: none; line-height: 1.5; }
+.raw-textarea.error { border-color: #e74c3c; }
+
+/* Divider */
+.divider { height: 1px; background: #e0e4ea; margin: 14px 0; }
+
+/* Page title */
+.page-title { margin-bottom: 16px; }
+.page-title h2 { font-size: 18px; font-weight: 600; color: #1a1a2e; }
+.page-title p { font-size: 12px; color: #888; margin-top: 3px; }
+.page-title-row { display: flex; align-items: flex-start; justify-content: space-between; }
+
+/* Quick actions */
+.quick-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+/* Section label */
+.section-label { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #aaa; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 SurveyFlow — datatable.json Editor</h1>
+  <span class="header-badge" id="fileNameBadge">Chưa mở file</span>
+  <button class="btn btn-secondary btn-sm" onclick="openFileFallback()" id="openFallbackBtn" style="display:none">📂 Open</button>
+  <button class="btn btn-secondary btn-sm" onclick="openFile()" id="openBtn">📂 Open File</button>
+  <button class="btn btn-success btn-sm" onclick="saveFile()" id="saveBtn" disabled>💾 Save</button>
+  <button class="btn btn-secondary btn-sm" onclick="toggleRaw()" id="rawToggleBtn">&#123;&#125; Raw</button>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-section">Configs</div>
+    <div id="configList"></div>
+    <div class="sidebar-footer">
+      <button class="btn btn-secondary btn-sm" style="width:100%" onclick="addConfig()">+ Add Config</button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="content" id="mainContent">
+    <div class="welcome">
+      <div class="welcome-icon">📄</div>
+      <h2>datatable.json Editor</h2>
+      <p>Mở file datatable.json để bắt đầu chỉnh sửa<br>Hỗ trợ cả Chrome/Edge (lưu trực tiếp) và Firefox (download)</p>
+      <button class="btn btn-primary" onclick="openFile()">📂 Open File</button>
+    </div>
+  </div>
+</div>
+
+<div class="statusbar" id="statusBar">
+  <div class="dot"></div>
+  <span class="msg">Chưa mở file nào</span>
+  <span style="flex:1"></span>
+  <span id="shortcutHint" style="color:#bbb">Ctrl+S để lưu</span>
+</div>
+
+<!-- Hidden file input fallback -->
+<input type="file" id="fileInputFallback" accept=".json" style="display:none" onchange="onFallbackFileChange(event)">
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+let fileHandle = null;
+let data = [];
+let activeConfig = 0;
+let activeTab = 'general';
+let showRaw = false;
+let dirty = false;
+const HAS_FS_API = typeof window.showOpenFilePicker === 'function';
+
+const STATS_ALL = ['base', 'percent', 't2b', 'b2b', 'mean', 'std', 'se', 'min', 'max'];
+
+// ═══════════════════════════════════════════════════════════
+// FILE OPERATIONS
+// ═══════════════════════════════════════════════════════════
+async function openFile() {
+  if (!HAS_FS_API) { document.getElementById('fileInputFallback').click(); return; }
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+    });
+    fileHandle = handle;
+    const file = await handle.getFile();
+    loadJSON(await file.text(), handle.name);
+  } catch (e) {
+    if (e.name !== 'AbortError') showError('Không mở được file: ' + e.message);
+  }
+}
+
+function openFileFallback() { document.getElementById('fileInputFallback').click(); }
+
+function onFallbackFileChange(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => loadJSON(ev.target.result, file.name);
+  reader.readAsText(file, 'utf-8');
+  e.target.value = '';
+}
+
+function loadJSON(text, name) {
+  try {
+    let parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) parsed = [parsed];
+    data = parsed;
+    activeConfig = 0;
+    activeTab = 'general';
+    dirty = false;
+    document.getElementById('saveBtn').disabled = false;
+    document.getElementById('fileNameBadge').textContent = name || 'file.json';
+    setStatus(`Đã mở: ${name}`, 'saved');
+    render();
+  } catch (e) {
+    showError('JSON không hợp lệ: ' + e.message);
+  }
+}
+
+async function saveFile() {
+  if (showRaw) syncRaw();
+  const text = JSON.stringify(data, null, 2);
+
+  if (HAS_FS_API) {
+    if (!fileHandle) {
+      try {
+        fileHandle = await window.showSaveFilePicker({
+          suggestedName: 'datatable.json',
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+        });
+      } catch (e) {
+        if (e.name !== 'AbortError') downloadFallback(text);
+        return;
+      }
+    }
+    try {
+      const writable = await fileHandle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      dirty = false;
+      setStatus(`Đã lưu: ${fileHandle.name}`, 'saved');
+      return;
+    } catch (e) {
+      // Permission might be revoked — fall through to download
+    }
+  }
+  downloadFallback(text);
+}
+
+function downloadFallback(text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: fileHandle?.name || 'datatable.json' });
+  a.click();
+  URL.revokeObjectURL(url);
+  dirty = false;
+  setStatus('Đã tải xuống (download mode)', 'saved');
+}
+
+function toggleRaw() {
+  if (!showRaw && data.length === 0) return;
+  if (showRaw) syncRaw();
+  showRaw = !showRaw;
+  document.getElementById('rawToggleBtn').textContent = showRaw ? '◀ Form' : '{} Raw';
+  renderContent();
+}
+
+function syncRaw() {
+  const ta = document.getElementById('rawEditor');
+  if (!ta) return;
+  try {
+    const parsed = JSON.parse(ta.value);
+    data = Array.isArray(parsed) ? parsed : [parsed];
+    activeConfig = Math.min(activeConfig, Math.max(0, data.length - 1));
+    ta.classList.remove('error');
+    markDirty();
+  } catch (e) {
+    ta.classList.add('error');
+  }
+}
+
+function setStatus(msg, type) {
+  const el = document.getElementById('statusBar');
+  el.className = 'statusbar ' + (type || '');
+  el.querySelector('.msg').textContent = msg;
+}
+
+function markDirty() {
+  dirty = true;
+  setStatus('Có thay đổi chưa lưu — Ctrl+S để lưu', 'dirty');
+}
+
+function showError(msg) {
+  setStatus('⚠ ' + msg, '');
+}
+
+// ═══════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════
+function render() { renderSidebar(); renderContent(); }
+
+function renderSidebar() {
+  const list = document.getElementById('configList');
+  if (data.length === 0) {
+    list.innerHTML = '<div style="padding:10px 14px;color:#bbb;font-size:12px">Không có config</div>';
+    return;
+  }
+  list.innerHTML = data.map((cfg, i) => `
+    <div class="config-item ${i === activeConfig ? 'active' : ''}" onclick="selectConfig(${i})">
+      <div class="ci-name">${h(cfg.sub_title || 'Config ' + (i+1))}</div>
+      <div class="ci-title">${h(cfg.title || '—')}</div>
+    </div>
+  `).join('');
+}
+
+function renderContent() {
+  const el = document.getElementById('mainContent');
+  if (data.length === 0) {
+    el.innerHTML = `<div class="welcome" style="height:100%">
+      <div class="welcome-icon">📋</div>
+      <h2>Không có config</h2>
+      <p>Nhấn "+ Add Config" ở sidebar để tạo mới</p>
+    </div>`;
+    return;
+  }
+
+  if (showRaw) {
+    el.innerHTML = `
+      <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center">
+        <span style="font-size:13px;color:#555">Raw JSON — chỉnh sửa trực tiếp, nhấn <strong>Save</strong> để lưu</span>
+        <button class="btn btn-secondary btn-sm" onclick="syncRaw();renderSidebar();renderContent()">↺ Áp dụng</button>
+      </div>
+      <textarea class="raw-textarea" id="rawEditor" spellcheck="false">${h(JSON.stringify(data, null, 2))}</textarea>
+    `;
+    return;
+  }
+
+  const cfg = data[activeConfig];
+  const bannerCount = (cfg.banner || []).length;
+  const stubCount = (cfg.stub || []).length;
+  const tableCount = (cfg.tables || []).length;
+
+  el.innerHTML = `
+    <div class="page-title-row">
+      <div class="page-title">
+        <h2>${h(cfg.sub_title || 'Config ' + (activeConfig+1))}</h2>
+        <p>${h(cfg.title || '—')}</p>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="removeConfig(${activeConfig})">🗑 Xóa config</button>
+    </div>
+    <div class="tabs">
+      <button class="tab ${activeTab==='general'?'active':''}" onclick="setTab('general')">⚙ General</button>
+      <button class="tab ${activeTab==='banner'?'active':''}" onclick="setTab('banner')">
+        Banner <span class="tab-badge">${bannerCount}</span>
+      </button>
+      <button class="tab ${activeTab==='stub'?'active':''}" onclick="setTab('stub')">
+        Stub <span class="tab-badge">${stubCount}</span>
+      </button>
+      <button class="tab ${activeTab==='tables'?'active':''}" onclick="setTab('tables')">
+        Tables <span class="tab-badge">${tableCount}</span>
+      </button>
+    </div>
+    <div id="tabContent">${renderTab(cfg)}</div>
+  `;
+}
+
+function renderTab(cfg) {
+  if (activeTab === 'general') return renderGeneral(cfg);
+  if (activeTab === 'banner')  return renderBanner(cfg);
+  if (activeTab === 'stub')    return renderStub(cfg);
+  if (activeTab === 'tables')  return renderTables(cfg);
+  return '';
+}
+
+// ─── GENERAL ──────────────────────────────────────────────
+function renderGeneral(cfg) {
+  const sig = cfg.significance_test || {};
+  const sigEnabled = sig.enabled !== false && sig.enabled !== undefined ? sig.enabled : false;
+  const sigLevels = sig.levels || [];
+  const sigMethod = sig.method || 'independent';
+
+  const bm = cfg.banner_matrix;
+
+  return `
+    <div class="card">
+      <div class="card-header"><div class="ch-left">📝 Thông tin cơ bản</div></div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="field-label">Title</label>
+            <input type="text" value="${a(cfg.title||'')}" oninput="setField('title',this.value)" placeholder="VD: VN8932 - Data Table">
+          </div>
+          <div class="form-group">
+            <label class="field-label">Sub Title</label>
+            <input type="text" value="${a(cfg.sub_title||'')}" oninput="setField('sub_title',this.value)" placeholder="VD: General">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="ch-left">🔬 Significance Test</div></div>
+      <div class="card-body">
+        <div class="form-row" style="margin-bottom:14px;align-items:center">
+          <label class="field-label" style="margin:0;width:80px">Bật Sig Test</label>
+          <div class="toggle-wrap">
+            <label class="toggle">
+              <input type="checkbox" ${sigEnabled?'checked':''} onchange="setSigField('enabled',this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label" style="color:${sigEnabled?'#1e8449':'#aaa'}">${sigEnabled?'Bật':'Tắt'}</span>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:.8">
+            <label class="field-label">Method</label>
+            <select onchange="setSigField('method',this.value)">
+              <option value="independent" ${sigMethod==='independent'?'selected':''}>independent</option>
+              <option value="paired" ${sigMethod==='paired'?'selected':''}>paired</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="field-label">Confidence Levels</label>
+            <div style="display:flex;gap:14px;margin-top:6px">
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+                <input type="checkbox" ${sigLevels.includes(90)?'checked':''} onchange="toggleSigLevel(90,this.checked)" style="width:14px;height:14px;accent-color:#1a73e8"> 90%
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+                <input type="checkbox" ${sigLevels.includes(95)?'checked':''} onchange="toggleSigLevel(95,this.checked)" style="width:14px;height:14px;accent-color:#1a73e8"> 95%
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="ch-left">🏷 Banner Matrix ${bm ? `<span style="font-size:11px;background:#e8f0fe;color:#1565c0;padding:2px 8px;border-radius:10px;font-weight:500">${h(bm.question||'?')} — ${h(bm.label||'')}</span>` : ''}</div>
+        ${bm
+          ? `<button class="btn btn-danger btn-xs" onclick="removeBannerMatrix()">Xóa</button>`
+          : `<button class="btn btn-secondary btn-xs" onclick="addBannerMatrix()">+ Thêm</button>`}
+      </div>
+      ${bm ? `
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="field-label">Label</label>
+              <input type="text" value="${a(bm.label||'')}" oninput="setBMField('label',this.value)">
+            </div>
+            <div class="form-group">
+              <label class="field-label">Question</label>
+              <input type="text" value="${a(bm.question||'')}" oninput="setBMField('question',this.value)" placeholder="VD: Q17">
+            </div>
+          </div>
+          <div style="font-size:12px;color:#888">
+            Groups: ${bm.groups ? `${bm.groups.length} groups được định nghĩa` : 'Không có — tự động lấy tất cả rows từ metadata'}
+            ${bm.groups ? '<span style="margin-left:8px;color:#bbb">(chỉnh sửa groups trong Raw JSON)</span>' : ''}
+          </div>
+        </div>
+      ` : `
+        <div class="card-body" style="color:#aaa;font-size:13px">
+          Chưa có banner_matrix. Thêm để dùng matrix rows (brands, v.v.) làm nested header columns.
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// ─── BANNER ───────────────────────────────────────────────
+function renderBanner(cfg) {
+  const banner = cfg.banner || [];
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div class="ch-left">📊 Banner Items</div>
+        <button class="btn btn-secondary btn-xs" onclick="addBannerItem()">+ Thêm</button>
+      </div>
+      <div class="card-body">
+        ${banner.length === 0
+          ? `<div class="empty-state"><div class="es-icon">📊</div><div class="es-msg">Chưa có banner item. Nhấn "+ Thêm" để thêm.</div></div>`
+          : banner.map((item, i) => renderBannerItem(item, i, banner.length)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderBannerItem(item, idx, total) {
+  const isTotal = item.filter === null && !item.question;
+  return `
+    <div class="banner-item">
+      <div class="banner-item-row">
+        <div class="reorder-btns">
+          <button class="reorder-btn" onclick="moveBanner(${idx},-1)" ${idx===0?'disabled':''}>▲</button>
+          <button class="reorder-btn" onclick="moveBanner(${idx},1)" ${idx===total-1?'disabled':''}>▼</button>
+        </div>
+        <span class="type-badge ${isTotal?'badge-total':'badge-question'}">${isTotal?'Total':'Column'}</span>
+        <span style="flex:1;font-weight:500;font-size:13px">${h(item.label||'')}</span>
+        ${isTotal ? '' : `<button class="btn btn-danger btn-xs" onclick="removeBannerItem(${idx})">✕ Xóa</button>`}
+      </div>
+      ${isTotal ? '' : `
+        <div style="margin-top:10px">
+          <div class="form-row">
+            <div class="form-group" style="flex:.8">
+              <label class="field-label">Question label</label>
+              <input type="text" value="${a(item.question||'')}" oninput="setBannerField(${idx},'question',this.value)" placeholder="VD: Q10">
+            </div>
+            <div class="form-group">
+              <label class="field-label">Banner column label</label>
+              <input type="text" value="${a(item.label||'')}" oninput="setBannerField(${idx},'label',this.value)">
+            </div>
+          </div>
+          <div class="banner-groups-section">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span class="section-label">Groups (${(item.groups||[]).length})</span>
+              <button class="btn btn-secondary btn-xs" onclick="addBannerGroup(${idx})">+ Thêm group</button>
+            </div>
+            ${(item.groups||[]).length === 0
+              ? `<div style="font-size:12px;color:#bbb;padding:6px 0">Chưa có groups</div>`
+              : (item.groups||[]).map((g, gi) => renderBannerGroup(idx, g, gi)).join('')}
+          </div>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function renderBannerGroup(bIdx, g, gIdx) {
+  const isMulti = Array.isArray(g.values);
+  const valDisplay = isMulti ? (g.values||[]).join(', ') : String(g.value ?? '');
+  return `
+    <div class="banner-group-row">
+      <div class="form-group" style="flex:1.5">
+        <label class="field-label">Label</label>
+        <input type="text" value="${a(g.label||'')}" oninput="setBannerGroup(${bIdx},${gIdx},'label',this.value)" placeholder="VD: Male">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label class="field-label">${isMulti ? 'Values (cách nhau bằng dấu phẩy)' : 'Value (số nguyên)'}</label>
+        <input type="text" value="${a(valDisplay)}" oninput="setBannerGroupValue(${bIdx},${gIdx},this.value)" placeholder="${isMulti?'1, 2, 3':'1'}">
+      </div>
+      <div style="padding-bottom:1px">
+        <label class="field-label">Mode</label>
+        <button class="btn btn-secondary btn-xs" style="display:block;white-space:nowrap" onclick="toggleBannerGroupMode(${bIdx},${gIdx})">${isMulti?'→ Single':'→ Multi'}</button>
+      </div>
+      <div style="padding-bottom:1px">
+        <label class="field-label">&nbsp;</label>
+        <button class="btn btn-danger btn-xs" onclick="removeBannerGroup(${bIdx},${gIdx})">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+// ─── STUB ─────────────────────────────────────────────────
+function renderStub(cfg) {
+  const stub = cfg.stub || [];
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div class="ch-left">📋 Stub Items</div>
+        <button class="btn btn-secondary btn-xs" onclick="addStubItem()">+ Thêm câu</button>
+      </div>
+      <div class="card-body">
+        ${stub.length === 0
+          ? `<div class="empty-state"><div class="es-icon">📋</div><div class="es-msg">Chưa có stub item. Nhấn "+ Thêm câu" để thêm.</div></div>`
+          : stub.map((item, i) => renderStubItem(item, i, stub.length)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderStubItem(item, idx, total) {
+  if (item.row_group) {
+    const items = item.items || [];
+    return `
+      <div class="stub-item row-group">
+        <div class="stub-row">
+          <div class="reorder-btns" style="margin-top:2px">
+            <button class="reorder-btn" onclick="moveStub(${idx},-1)" ${idx===0?'disabled':''}>▲</button>
+            <button class="reorder-btn" onclick="moveStub(${idx},1)" ${idx===total-1?'disabled':''}>▼</button>
+          </div>
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span style="font-size:11px;background:#f3e5f5;color:#7b1fa2;padding:2px 8px;border-radius:10px;font-weight:600">ROW GROUP</span>
+              <span style="font-size:12px;color:#888">${items.length} câu — chỉnh sửa trong Raw JSON</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px">
+              ${items.map(it => `<span style="background:#f0f0f0;color:#555;padding:3px 10px;border-radius:6px;font-size:12px">${h(it.question||'?')}</span>`).join('')}
+            </div>
+          </div>
+          <button class="btn btn-danger btn-xs" style="margin-top:2px" onclick="removeStubItem(${idx})">✕ Xóa</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const stats = item.stats || [];
+  return `
+    <div class="stub-item">
+      <div class="stub-row">
+        <div class="reorder-btns" style="margin-top:2px">
+          <button class="reorder-btn" onclick="moveStub(${idx},-1)" ${idx===0?'disabled':''}>▲</button>
+          <button class="reorder-btn" onclick="moveStub(${idx},1)" ${idx===total-1?'disabled':''}>▼</button>
+        </div>
+        <div style="flex:1">
+          <div class="form-row" style="margin-bottom:10px">
+            <div class="form-group" style="flex:.7">
+              <label class="field-label">Question</label>
+              <input type="text" value="${a(item.question||'')}" oninput="setStubField(${idx},'question',this.value)" placeholder="VD: Q10">
+            </div>
+            <div class="form-group" style="flex:1.5">
+              <label class="field-label">Label</label>
+              <input type="text" value="${a(item.label||'')}" oninput="setStubField(${idx},'label',this.value)" placeholder="VD: Gender">
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Stats</label>
+            <div class="stats-grid">
+              ${STATS_ALL.map(s => `
+                <label class="stat-chip">
+                  <input type="checkbox" ${stats.includes(s)?'checked':''} onchange="toggleStat(${idx},'${s}',this.checked)">
+                  ${s}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-danger btn-xs" style="margin-top:2px;flex-shrink:0" onclick="removeStubItem(${idx})">✕ Xóa</button>
+      </div>
+    </div>
+  `;
+}
+
+// ─── TABLES ───────────────────────────────────────────────
+function renderTables(cfg) {
+  const tables = cfg.tables || [];
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div class="ch-left">📑 Sheets</div>
+        <button class="btn btn-secondary btn-xs" onclick="addTableSheet()">+ Thêm sheet</button>
+      </div>
+      <div class="card-body">
+        ${tables.length === 0
+          ? `<div class="empty-state"><div class="es-icon">📑</div><div class="es-msg">Chưa có sheet.</div></div>`
+          : tables.map((t, i) => `
+            <div class="sheet-row ${t.enabled===false?'disabled-row':''}">
+              <div style="padding-bottom:1px">
+                <label class="field-label">Bật</label>
+                <label class="toggle">
+                  <input type="checkbox" ${t.enabled!==false?'checked':''} onchange="setTableField(${i},'enabled',this.checked)">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-group" style="flex:.8">
+                <label class="field-label">Sheet name</label>
+                <input type="text" value="${a(t.sheet||'')}" oninput="setTableField(${i},'sheet',this.value)">
+              </div>
+              <div class="form-group" style="flex:1.1">
+                <label class="field-label">Cell content</label>
+                <select onchange="setTableField(${i},'cell_content',this.value)">
+                  <option value="count" ${t.cell_content==='count'?'selected':''}>count</option>
+                  <option value="percentage" ${t.cell_content==='percentage'?'selected':''}>percentage</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:.8">
+                <label class="field-label">Show sig</label>
+                <select onchange="setTableField(${i},'show_sig',this.value==='true')">
+                  <option value="false" ${!t.show_sig?'selected':''}>Không</option>
+                  <option value="true" ${t.show_sig?'selected':''}>Có</option>
+                </select>
+              </div>
+              <div style="padding-bottom:1px">
+                <label class="field-label">&nbsp;</label>
+                <button class="btn btn-danger btn-xs" onclick="removeTableSheet(${i})">✕</button>
+              </div>
+            </div>
+          `).join('')}
+
+        <div class="divider"></div>
+        <div class="section-label">Quick add</div>
+        <div class="quick-btns">
+          <button class="btn btn-secondary btn-sm" onclick="quickSheet('Count','count',false)">+ Count</button>
+          <button class="btn btn-secondary btn-sm" onclick="quickSheet('Pct','percentage',false)">+ Pct</button>
+          <button class="btn btn-secondary btn-sm" onclick="quickSheet('Sig','percentage',true)">+ Sig</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════
+// MUTATIONS — GENERAL
+// ═══════════════════════════════════════════════════════════
+function selectConfig(idx) { activeConfig = idx; renderSidebar(); renderContent(); }
+function setTab(tab) { activeTab = tab; renderContent(); }
+function cfg() { return data[activeConfig]; }
+
+function setField(key, val) {
+  cfg()[key] = val;
+  markDirty();
+  // Update sidebar name live
+  const items = document.querySelectorAll('.config-item');
+  const c = cfg();
+  if (items[activeConfig]) {
+    items[activeConfig].querySelector('.ci-name').textContent = c.sub_title || 'Config ' + (activeConfig+1);
+    items[activeConfig].querySelector('.ci-title').textContent = c.title || '—';
+  }
+}
+
+function setSigField(key, val) {
+  const c = cfg();
+  if (!c.significance_test) c.significance_test = { enabled: false, levels: [90,95], method: 'independent' };
+  c.significance_test[key] = val;
+  markDirty();
+  if (key === 'enabled') renderContent(); // refresh toggle color
+}
+
+function toggleSigLevel(level, checked) {
+  const c = cfg();
+  if (!c.significance_test) c.significance_test = { enabled: false, levels: [90,95], method: 'independent' };
+  let levels = [...(c.significance_test.levels || [])];
+  if (checked && !levels.includes(level)) levels.push(level);
+  else if (!checked) levels = levels.filter(l => l !== level);
+  c.significance_test.levels = levels.sort((a,b)=>a-b);
+  markDirty();
+}
+
+function addBannerMatrix() {
+  cfg().banner_matrix = { label: 'Brand', question: 'Q?' };
+  markDirty(); renderContent();
+}
+function removeBannerMatrix() {
+  delete cfg().banner_matrix;
+  markDirty(); renderContent();
+}
+function setBMField(key, val) {
+  if (!cfg().banner_matrix) return;
+  cfg().banner_matrix[key] = val;
+  markDirty();
+}
+
+// ═══════════════════════════════════════════════════════════
+// MUTATIONS — BANNER
+// ═══════════════════════════════════════════════════════════
+function addBannerItem() {
+  if (!cfg().banner) cfg().banner = [{ label: 'Total', filter: null }];
+  cfg().banner.push({ label: 'New Column', question: 'Q?', groups: [] });
+  markDirty(); setTab('banner');
+}
+function removeBannerItem(idx) {
+  cfg().banner.splice(idx, 1);
+  markDirty(); renderContent();
+}
+function moveBanner(idx, dir) {
+  const arr = cfg().banner;
+  const ni = idx + dir;
+  if (ni < 0 || ni >= arr.length) return;
+  [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
+  markDirty(); renderContent();
+}
+function setBannerField(idx, key, val) {
+  cfg().banner[idx][key] = val;
+  markDirty();
+}
+function addBannerGroup(bIdx) {
+  const item = cfg().banner[bIdx];
+  if (!item.groups) item.groups = [];
+  item.groups.push({ label: 'New', value: 0 });
+  markDirty(); renderContent();
+}
+function removeBannerGroup(bIdx, gIdx) {
+  cfg().banner[bIdx].groups.splice(gIdx, 1);
+  markDirty(); renderContent();
+}
+function setBannerGroup(bIdx, gIdx, key, val) {
+  cfg().banner[bIdx].groups[gIdx][key] = val;
+  markDirty();
+}
+function setBannerGroupValue(bIdx, gIdx, val) {
+  const g = cfg().banner[bIdx].groups[gIdx];
+  if (Array.isArray(g.values)) {
+    g.values = val.split(',').map(v => { const n = parseInt(v.trim()); return isNaN(n) ? v.trim() : n; }).filter(v => v !== '' && v !== null);
+  } else {
+    const n = parseInt(val);
+    g.value = isNaN(n) ? val : n;
+  }
+  markDirty();
+}
+function toggleBannerGroupMode(bIdx, gIdx) {
+  const g = cfg().banner[bIdx].groups[gIdx];
+  if (Array.isArray(g.values)) {
+    const first = g.values[0];
+    delete g.values;
+    g.value = first !== undefined ? first : 0;
+  } else {
+    const v = g.value;
+    delete g.value;
+    g.values = v !== undefined && v !== '' ? [v] : [];
+  }
+  markDirty(); renderContent();
+}
+
+// ═══════════════════════════════════════════════════════════
+// MUTATIONS — STUB
+// ═══════════════════════════════════════════════════════════
+function addStubItem() {
+  if (!cfg().stub) cfg().stub = [];
+  cfg().stub.push({ question: 'Q?', label: 'New Question', stats: ['base', 'percent'] });
+  markDirty(); setTab('stub');
+}
+function removeStubItem(idx) {
+  cfg().stub.splice(idx, 1);
+  markDirty(); renderContent();
+}
+function moveStub(idx, dir) {
+  const arr = cfg().stub;
+  const ni = idx + dir;
+  if (ni < 0 || ni >= arr.length) return;
+  [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
+  markDirty(); renderContent();
+}
+function setStubField(idx, key, val) {
+  cfg().stub[idx][key] = val;
+  markDirty();
+}
+function toggleStat(idx, stat, checked) {
+  const item = cfg().stub[idx];
+  if (!item.stats) item.stats = [];
+  if (checked && !item.stats.includes(stat)) {
+    item.stats = STATS_ALL.filter(s => item.stats.includes(s) || s === stat);
+  } else if (!checked) {
+    item.stats = item.stats.filter(s => s !== stat);
+  }
+  markDirty();
+  // No full re-render — CSS :has() handles chip styling automatically
+}
+
+// ═══════════════════════════════════════════════════════════
+// MUTATIONS — TABLES
+// ═══════════════════════════════════════════════════════════
+function addTableSheet() {
+  if (!cfg().tables) cfg().tables = [];
+  cfg().tables.push({ sheet: 'New', cell_content: 'percentage', show_sig: false, enabled: true });
+  markDirty(); renderContent();
+}
+function removeTableSheet(idx) {
+  cfg().tables.splice(idx, 1);
+  markDirty(); renderContent();
+}
+function setTableField(idx, key, val) {
+  cfg().tables[idx][key] = val;
+  markDirty();
+  if (key === 'enabled') renderContent();
+}
+function quickSheet(sheet, content, sig) {
+  if (!cfg().tables) cfg().tables = [];
+  const ex = cfg().tables.find(t => t.sheet === sheet);
+  if (ex) { ex.enabled = true; }
+  else { cfg().tables.push({ sheet, cell_content: content, show_sig: sig, enabled: true }); }
+  markDirty(); renderContent();
+}
+
+// ═══════════════════════════════════════════════════════════
+// CONFIG MANAGEMENT
+// ═══════════════════════════════════════════════════════════
+function addConfig() {
+  data.push({
+    title: 'Survey - Data Table',
+    sub_title: 'Config ' + (data.length + 1),
+    significance_test: { enabled: false, levels: [90, 95], method: 'independent' },
+    banner: [{ label: 'Total', filter: null }],
+    stub: [],
+    tables: [{ sheet: 'Pct', cell_content: 'percentage', show_sig: false, enabled: true }]
+  });
+  activeConfig = data.length - 1;
+  activeTab = 'general';
+  markDirty(); render();
+}
+
+function removeConfig(idx) {
+  if (!confirm(`Xóa config "${data[idx].sub_title || 'Config ' + (idx+1)}"?`)) return;
+  data.splice(idx, 1);
+  activeConfig = Math.max(0, idx - 1);
+  markDirty(); render();
+}
+
+// ═══════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════
+function h(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function a(s) { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+
+// ═══════════════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS
+// ═══════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (data.length) saveFile(); }
+});
+
+// ═══════════════════════════════════════════════════════════
+// INIT — detect browser support
+// ═══════════════════════════════════════════════════════════
+(function init() {
+  if (!HAS_FS_API) {
+    // Show fallback open button, hide FS API button
+    document.getElementById('openBtn').style.display = 'none';
+    document.getElementById('openFallbackBtn').style.display = '';
+    document.getElementById('shortcutHint').textContent = 'Ctrl+S để download';
+    document.querySelector('.header').insertAdjacentHTML('beforeend',
+      '<span style="font-size:11px;color:#ffd;margin-left:4px" title="Dùng Chrome/Edge để lưu trực tiếp">⚠ Download mode</span>'
+    );
+  }
+})();
+</script>
+</body>
+</html>

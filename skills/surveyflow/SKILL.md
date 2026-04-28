@@ -23,6 +23,37 @@ If fails → `pip install surveyflow` (or `pip install -e .` for local dev).
 
 ---
 
+## Available tools
+
+| File | Purpose |
+|---|---|
+| `tools/generate_step4_form.py` | Generate Step 4 interactive HTML form from `metadata.json` — show in preview panel so user picks table type / banner / stub in one shot |
+| `datatable-editor.html` | Standalone visual editor for `datatable.json` — open in browser, no server needed. Chrome/Edge: save in-place; Firefox: download |
+| `skills/surveyflow/scripts/list_questions.py` | List banner-eligible or stub-eligible questions from `metadata.json` |
+| `skills/surveyflow/scripts/check_choices.py` | Print choice codes for a question (ready-to-paste banner groups snippet) |
+
+### Preview panel setup (Step 4 form)
+
+`.claude/launch.json` is git-ignored. Create it once per machine if missing:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "step4-form",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "7891"],
+      "port": 7891
+    }
+  ]
+}
+```
+
+Then use `preview_start(name="step4-form")` before showing the form.
+
+---
+
 ## Output folder structure
 
 ```
@@ -97,7 +128,44 @@ python skills/surveyflow/scripts/check_choices.py output/SURVEY_NAME/data/metada
 
 **If user already specified requirements** → create `datatable/datatable.json` directly.
 
-**If not specified** → ask 3 questions sequentially:
+**If not specified** → use the **preview panel form** (preferred) or ask sequentially in chat.
+
+#### Option A — Preview panel form (recommended)
+
+Generate and show an interactive form in one shot. User selects all 3 options at once:
+
+```bash
+python tools/generate_step4_form.py \
+  output/SURVEY_NAME/data/metadata.json \
+  step4_form.html \
+  "SURVEY_NAME"
+```
+
+Then start the preview server and navigate to `step4_form.html`.
+After user submits, read the result:
+
+```javascript
+// via preview_eval:
+window.__result
+// returns: { submitted, table_type, banner, stub_mode, stub }
+```
+
+`window.__result` structure:
+```json
+{
+  "submitted": true,
+  "table_type": 4,
+  "banner": ["Q1", "Q2"],
+  "stub_mode": "all",
+  "stub": ["Q1", "Q2", "Q3", "..."]
+}
+```
+
+Table type mapping: `1` = Count only · `2` = Pct only · `3` = Pct + Sig · `4` = All
+
+#### Option B — Sequential text questions (fallback)
+
+Ask 3 questions one by one when preview panel is not available:
 
 **Q1 — Table type:**
 > "Bạn muốn chạy bảng theo dạng nào?

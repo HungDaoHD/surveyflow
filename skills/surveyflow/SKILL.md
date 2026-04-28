@@ -128,9 +128,11 @@ python skills/surveyflow/scripts/check_choices.py output/SURVEY_NAME/data/metada
 
 **If user already specified requirements** → create `datatable/datatable.json` directly.
 
-**If not specified** → use the **preview panel form** (preferred) or ask sequentially in chat.
+**If not specified** → choose option based on environment:
+- **Claude Code** (has `preview_start` tool) → use Option A (preview panel form)
+- **Claude chat / Claude.ai** → use Option B (sequential text questions)
 
-#### Option A — Preview panel form (recommended)
+#### Option A — Preview panel form (Claude Code only)
 
 Generate and show an interactive form in one shot. User selects all 3 options at once:
 
@@ -163,9 +165,9 @@ window.__result
 
 Table type mapping: `1` = Count only · `2` = Pct only · `3` = Pct + Sig · `4` = All
 
-#### Option B — Sequential text questions (fallback)
+#### Option B — Sequential text questions (Claude chat / fallback)
 
-Ask 3 questions one by one when preview panel is not available:
+Ask 3 questions one by one in chat:
 
 **Q1 — Table type:**
 > "Bạn muốn chạy bảng theo dạng nào?

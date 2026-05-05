@@ -19,12 +19,12 @@ load_dotenv()
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-SURVEY_ID   = 723061                    # int  — survey ID từ QMe
-SURVEY_NAME = "VN8931_Baby_Food_Package"  # str  — tên thư mục output
+SURVEY_ID   = 723334                    # int  — survey ID từ QMe
+SURVEY_NAME = "VN8966_DUC"  # str  — tên thư mục output
 
 # Bật/tắt từng bước
-FETCH_MCP   = False   # True  = fetch lại data từ QMe (ghi đè mcp/)
-RUN_INGEST  = False   # True  = chạy lại ingestion (ghi đè data/)
+FETCH_MCP   = True   # True  = fetch lại data từ QMe (ghi đè mcp/)
+RUN_INGEST  = True   # True  = chạy lại ingestion (ghi đè data/)
 RUN_TABLE   = True    # True  = chạy table → datatable.xlsx
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)

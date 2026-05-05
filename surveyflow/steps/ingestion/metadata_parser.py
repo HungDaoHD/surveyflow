@@ -10,6 +10,7 @@ _TYPE_LABEL: dict[int, str] = {
     4:    "Matrix_SA",   # matrix — single answer per row
     5:    "Matrix_MA",   # matrix — multiple answers per row
     6:    "ranking",
+    8:    "SA",          # singlechoice (alternate type code)
     9:    "MA",          # grid MA (answer coded same as MA)
     28:   "Matrix_SA",   # matrix SA — numeric/rating per row
     29:   "Matrix_MA",   # matrix MA — multiple cols per row
@@ -19,7 +20,7 @@ _TYPE_LABEL: dict[int, str] = {
     1101: "NUM",         # singlenumber (numeric input)
     1106: "user-name",
     1107: "user-phone",
-    1109: "area",
+    1109: "SA",          # area → treated as SA with synthetic choices
 }
 
 _INPUT_TYPE_LABEL: dict[int, str] = {
@@ -51,10 +52,34 @@ def _detect_other_codes(choices_i18n: dict) -> list[str]:
 
 
 _TYPE_NAME_LABEL: dict[str, str] = {
-    "gender":         "SA",
-    "married-status": "SA",
-    "photo":          "photo",
+    "gender":          "SA",
+    "married-status":  "SA",
+    "area":            "SA",
+    "personal-income": "SA",
+    "photo":           "photo",
 }
+
+# ── Synthetic choices for special question types ──────────────────────────────
+
+GENDER_CHOICES: dict[str, dict] = {
+    "1": {"vi": "Nam",  "en": "Male"},
+    "2": {"vi": "Nữ",   "en": "Female"},
+}
+
+# Fixed city codes for area questions; unknown values are auto-assigned 5, 6, 7…
+AREA_BASE_CHOICES: dict[str, dict] = {
+    "1": {"vi": "Hồ Chí Minh", "en": "Ho Chi Minh City"},
+    "2": {"vi": "Hà Nội",      "en": "Hanoi"},
+    "3": {"vi": "Đà Nẵng",     "en": "Da Nang"},
+    "4": {"vi": "Cần Thơ",     "en": "Can Tho"},
+}
+
+# personal-income choices are auto-discovered at encode time (actual answer text
+# from QMe uses VND number ranges like "10,000,001 - 15,000,000 VND").
+# Codes are assigned by sorting ranges by their lower bound (lowest = code 1).
+# "Don't know" variants are always assigned code 99.
+# The filled-in choices_i18n is persisted back into metadata.json after encode.
+PERSONAL_INCOME_CHOICES: dict[str, dict] = {}   # placeholder — populated at runtime
 
 def _resolve_answer_type(q_type: int, input_type: int, type_name: str = "") -> str:
     if type_name in _TYPE_NAME_LABEL:
@@ -153,6 +178,20 @@ def parse_metadata(definition: dict) -> dict:
         else:
             other_codes = []
 
+        # ── synthetic choices for special types ─────────────────────────────
+        import copy as _copy
+        type_name_str = q.get("type_name", "")
+        synthetic_type = ""
+        if type_name_str == "gender":
+            choices_i18n  = _copy.deepcopy(GENDER_CHOICES)
+            synthetic_type = "gender"
+        elif type_name_str == "area" or q_type == 1109:
+            choices_i18n  = _copy.deepcopy(AREA_BASE_CHOICES)
+            synthetic_type = "area"
+        elif type_name_str == "personal-income":
+            choices_i18n  = _copy.deepcopy(PERSONAL_INCOME_CHOICES)
+            synthetic_type = "personal-income"
+
         q_entry: dict = {
             "position":     pos,
             "question_id":  qid,
@@ -163,6 +202,9 @@ def parse_metadata(definition: dict) -> dict:
             "status":       q.get("status", 1),
             "choices_i18n": choices_i18n,
         }
+        if synthetic_type:
+            q_entry["synthetic_choices"] = True
+            q_entry["synthetic_type"]    = synthetic_type
         if other_codes:
             q_entry["other_choice_codes"] = other_codes
         if sub_questions:

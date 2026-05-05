@@ -56,6 +56,7 @@ def _fmt_location(loc: Any) -> str:
 _SCALAR_ROW_TYPES = {
     "user-name", "user-phone", "freetext", "singlechoice",
     "date", "area", "singlenumber", "reward",
+    "gender", "personal-income",   # special types — answer is text, recoded later
 }
 
 # Integer type codes that indicate a matrix question in format=code row data
@@ -165,16 +166,26 @@ def _parse_single_row(
         if rtype_int in _MATRIX_ROW_TYPES:
             answer_raw = rq.get("answer")
             row_cols: dict[str, list[str]] = defaultdict(list)
+            # Per-cell other_text: some matrix questions embed other_text directly
+            # inside each answer item as {"row": r, "col": c, "other_text": "..."}
+            # rather than at the top-level rq["other_text"] field.
+            cell_others: dict[tuple[str, str], str] = {}
             if isinstance(answer_raw, list):
                 for item in answer_raw:
                     r = str(item.get("row") or item.get("vertical_answer", "")).strip()
                     c = str(item.get("col") or item.get("horizontal_answer", "")).strip()
                     if r and c:
                         row_cols[r].append(c)
+                        ot_cell = str(item.get("other_text") or "").strip()
+                        if ot_cell:
+                            cell_others[(r, c)] = ot_cell
                 for row_code, col_codes in row_cols.items():
                     record[f"q{pos}_r{row_code}"] = ";".join(col_codes)
+            # Write per-cell other_text (new format: other_text inside answer items)
+            for (r, c), ot_val in cell_others.items():
+                record[f"q{pos}_r{r}_o{c}"] = ot_val
 
-            # ── matrix other_text ──────────────────────────────────────────────
+            # ── matrix other_text (legacy format: top-level rq["other_text"]) ──
             _ot = rq.get("other_text") or ""
             other = (";".join(_ot) if isinstance(_ot, list) else _ot).strip()
             if other and row_cols:
@@ -256,7 +267,7 @@ def parse_rows(
 # Step 2 – encode answers → numeric codes
 # ─────────────────────────────────────────────
 
-from surveyflow.steps.ingestion.metadata_parser import CODEABLE_TYPES
+from surveyflow.steps.ingestion.metadata_parser import CODEABLE_TYPES, AREA_BASE_CHOICES
 
 
 def _parse_number(value: Any) -> int | float | str:
@@ -294,6 +305,55 @@ def enrich_metadata_values(
 
 # ── encode_records ────────────────────────────────────────────────────────────
 
+# ── normalised city aliases for area recoding ─────────────────────────────────
+_AREA_ALIASES: dict[str, int] = {
+    # Hồ Chí Minh
+    "hồ chí minh": 1, "ho chi minh": 1, "tp.hcm": 1, "tp hcm": 1,
+    "hcm": 1, "tphcm": 1, "sài gòn": 1, "sai gon": 1,
+    # Hà Nội
+    "hà nội": 2, "ha noi": 2, "hn": 2, "hanoi": 2,
+    # Đà Nẵng
+    "đà nẵng": 3, "da nang": 3, "dn": 3, "danang": 3,
+    # Cần Thơ
+    "cần thơ": 4, "can tho": 4, "ct": 4, "cantho": 4,
+}
+
+_GENDER_RECODE: dict[str, int] = {
+    "nam": 1, "male": 1, "1": 1, "m": 1,
+    "nữ": 2, "nu": 2, "female": 2, "2": 2, "f": 2,
+}
+
+# "don't know" variants for personal-income → always code 99
+_INCOME_DONT_KNOW: frozenset[str] = frozenset({
+    "tôi không biết", "toi khong biet", "không biết", "khong biet",
+    "don't know", "dont know", "i don't know", "i dont know",
+    "prefer not to say", "prefer not to answer",
+})
+
+
+def _recode_gender(value: Any) -> Any:
+    """'Nam'/'Nữ' / 'Male'/'Female' → 1 / 2."""
+    return _GENDER_RECODE.get(str(value).strip().lower(), value)
+
+
+def _income_lower_bound(text: str) -> float:
+    """Extract the lower-bound number from a VND range string.
+
+    '10,000,001 - 15,000,000 VND' → 10000001.0
+    'Under 5,000,000 VND'         → 0.0
+    'Over 70,000,000 VND'         → 70000000.0
+    Unrecognised                   → inf  (sorts to end)
+    """
+    import re
+    nums = re.findall(r'[\d,]+', text)
+    if not nums:
+        return float('inf')
+    try:
+        return float(nums[0].replace(',', ''))
+    except ValueError:
+        return float('inf')
+
+
 def _col_to_meta_map(metadata: dict) -> dict[str, dict]:
     """Build {q{position}: metadata_entry} lookup from metadata."""
     return {
@@ -310,13 +370,95 @@ def encode_records(
 ) -> list[dict]:
     """Convert answers to numeric codes.
 
-    SA  (singlechoice)   → int            (API already returns integer code)
-    MA  (multiplechoice) → "1;3;5"        (API already returns code string)
-    ranking              → "2;1;3"        (same)
-    NUM                  → int / float    (parse numeric string)
+    SA  (singlechoice)      → int            (API already returns integer code)
+    SA  gender              → int  1/2       (text → code via _GENDER_RECODE)
+    SA  area                → int  1-4+      (text → code; new cities auto-assigned 5+)
+    SA  personal-income     → int  1-12/99   (text matched against choices_i18n)
+    MA  (multiplechoice)    → "1;3;5"        (API already returns code string)
+    ranking                 → "2;1;3"        (same)
+    NUM                     → int / float    (parse numeric string)
     """
     col_to_meta = _col_to_meta_map(metadata)
-    encoded = []
+
+    import copy as _copy
+
+    # ── Pre-pass: discover area city values → build per-column code maps ──────
+    # Mutates metadata["questions"][...]["choices_i18n"] in-place to record
+    # any auto-assigned city codes so they appear in metadata.json.
+    area_code_maps: dict[str, dict[str, int]] = {}   # col → {text_lower: code}
+
+    for col, q in col_to_meta.items():
+        if q.get("synthetic_type") != "area":
+            continue
+        # Collect every unique (non-empty) text answer for this column
+        seen: set[str] = set()
+        for rec in raw_records:
+            val = str(rec.get(col, "")).strip()
+            if val:
+                seen.add(val)
+
+        # Build code map: known aliases first, then auto-assign 5+
+        code_map: dict[str, int] = {}   # text_lower → int code
+        next_code = 5
+        choices: dict[str, dict] = _copy.deepcopy(AREA_BASE_CHOICES)
+
+        for text in sorted(seen):
+            tl = text.lower()
+            if tl in code_map:
+                continue
+            if tl in _AREA_ALIASES:
+                code_map[tl] = _AREA_ALIASES[tl]
+            else:
+                code_map[tl] = next_code
+                choices[str(next_code)] = {"vi": text, "en": text}
+                next_code += 1
+
+        # Persist discovered choices back into metadata (for metadata.json output)
+        q["choices_i18n"] = choices
+        area_code_maps[col] = code_map
+
+    # ── Pre-pass: discover personal-income values → sorted code map ──────────
+    # Codes are assigned in ascending income order (lowest range = 1).
+    # "Don't know" variants are always mapped to 99.
+    income_code_maps: dict[str, dict[str, int]] = {}   # col → {text_lower: code}
+
+    for col, q in col_to_meta.items():
+        if q.get("synthetic_type") != "personal-income":
+            continue
+
+        seen_income: set[str] = set()
+        for rec in raw_records:
+            val = str(rec.get(col, "")).strip()
+            if val:
+                seen_income.add(val)
+
+        # Separate "don't know" from actual range strings
+        dont_know_texts: list[str] = []
+        range_texts: list[str] = []
+        for text in seen_income:
+            if text.strip().lower() in _INCOME_DONT_KNOW:
+                dont_know_texts.append(text)
+            else:
+                range_texts.append(text)
+
+        # Sort ranges by lower bound (smallest income first)
+        range_texts.sort(key=_income_lower_bound)
+
+        code_map_inc: dict[str, int] = {}
+        choices_inc: dict[str, dict] = {}
+        for i, text in enumerate(range_texts, 1):
+            code_map_inc[text.strip().lower()] = i
+            choices_inc[str(i)] = {"vi": text, "en": text}
+
+        for text in dont_know_texts:
+            code_map_inc[text.strip().lower()] = 99
+        choices_inc["99"] = {"vi": "Tôi không biết", "en": "Don't know"}
+
+        q["choices_i18n"] = choices_inc
+        income_code_maps[col] = code_map_inc
+
+    # ── Main encode pass ──────────────────────────────────────────────────────
+    encoded: list[dict] = []
 
     for record in raw_records:
         new_rec: dict[str, Any] = {}
@@ -326,13 +468,25 @@ def encode_records(
                 new_rec[col] = value
                 continue
 
-            atype = q["answer_type"]
+            atype          = q["answer_type"]
+            synthetic_type = q.get("synthetic_type", "")
 
             if atype == "SA":
-                try:
-                    new_rec[col] = int(value)
-                except (ValueError, TypeError):
-                    new_rec[col] = value
+                if synthetic_type == "gender":
+                    new_rec[col] = _recode_gender(value)
+                elif synthetic_type == "area":
+                    tl = str(value).strip().lower()
+                    cmap = area_code_maps.get(col, {})
+                    new_rec[col] = cmap.get(tl, value)
+                elif synthetic_type == "personal-income":
+                    tl = str(value).strip().lower()
+                    cmap = income_code_maps.get(col, {})
+                    new_rec[col] = cmap.get(tl, value)
+                else:
+                    try:
+                        new_rec[col] = int(value)
+                    except (ValueError, TypeError):
+                        new_rec[col] = value
             elif atype == "NUM":
                 new_rec[col] = _parse_number(value)
             else:

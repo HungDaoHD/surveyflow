@@ -101,6 +101,115 @@ def build_banner(
         langs = meta.get("choices_i18n", {}).get(str(code), {})
         return langs.get("en") or langs.get("vi") or next(iter(langs.values()), str(code))
 
+    def _expand_with_levels(entry: dict, group_label: str) -> list[BannerColumn]:
+        """Handle banner entries with ``levels`` (multi-level nesting) or ``show_total``.
+
+        Mirrors the JS ``buildBannerTree`` / ``buildLevelChildren`` / ``getLeafs``
+        logic from *datatable-editor.html* so that Python and the browser preview
+        produce identical column structures.
+
+        datatable.json format
+        ---------------------
+        ::
+
+            {
+                "label":      "Store Type",
+                "question":   "Q2",
+                "groups":     [{"label": "Super", "value": 1}, ...],   # Lv1
+                "show_total": true,                                      # add Total before Lv1
+                "levels": [
+                    {
+                        "question":   "Q3",
+                        "label":      "City",
+                        "groups":     [{"label": "HCM", "value": 1}, ...],  # Lv2
+                        "show_total": true                               # add Total before Lv2
+                    },
+                    ...   # Lv3, Lv4, Lv5 …
+                ]
+            }
+
+        Tree → ``BannerColumn`` mapping
+        --------------------------------
+        * depth 0 (root item label)         → ``group_label``
+        * depth 1 … N-1 (intermediate)      → ``level_labels[0 … N-2]``
+        * depth N (leaf / deepest group)    → ``subgroup_label``
+
+        The mask is the intersection of all ancestor group filters.
+        """
+        lv1_q       = entry.get("question", "")
+        lv1_col     = _resolve(lv1_q) if lv1_q else ""
+        lv1_groups  = entry.get("groups", [])
+        levels      = entry.get("levels", [])
+        show_total1 = entry.get("show_total", False)
+
+        result:  list[BannerColumn] = []
+        counter: list[int]          = [0]
+
+        def _recurse(
+            parent_mask: pd.Series,
+            remaining:   list[dict],
+            path:        list[str],
+        ) -> None:
+            """
+            parent_mask : cumulative respondent filter
+            remaining   : level items still to be processed
+            path        : labels from Lv1 to current node (root excluded)
+            """
+            if not remaining:
+                # Leaf — emit one BannerColumn
+                result.append(BannerColumn(
+                    group_label    = group_label,
+                    subgroup_label = path[-1] if path else (entry.get("label") or group_label),
+                    letter         = _letter(counter[0]),
+                    mask           = parent_mask,
+                    is_total       = False,
+                    level_labels   = path[:-1] if path else [],
+                ))
+                counter[0] += 1
+                return
+
+            lv     = remaining[0]
+            rest   = remaining[1:]
+            lq     = lv.get("question", "")
+            lq_col = _resolve(lq) if lq else ""
+            lgrps  = lv.get("groups", [])
+            show_t = lv.get("show_total", False)
+
+            # show_total at this level → add a "Total" sibling FIRST (unfiltered)
+            if show_t and lgrps:
+                _recurse(parent_mask, rest, path + ["Total"])
+
+            if not lgrps:
+                # Pass-through: no filter at this level
+                _recurse(parent_mask, rest, path + [lv.get("label") or lq])
+            else:
+                for g in lgrps:
+                    g_mask = parent_mask & _make_mask(
+                        lq, lq_col, g.get("value"), g.get("values")
+                    )
+                    _recurse(g_mask, rest, path + [g["label"]])
+
+        all_rows = pd.Series(True, index=df.index)
+
+        # Lv1 — show_total: add "Total" FIRST (left-most), then each group
+        if show_total1 and lv1_groups:
+            _recurse(all_rows, levels, ["Total"])
+
+        if not lv1_groups:
+            # No Lv1 groups → single pass-through node
+            _recurse(all_rows, levels, [])
+        else:
+            for g in lv1_groups:
+                g_mask = _make_mask(lv1_q, lv1_col, g.get("value"), g.get("values"))
+                _recurse(g_mask, levels, [g["label"]])
+
+        return result
+
+    # If any question-level entry has show_total=True, each question already produces
+    # its own Total sub-column → suppress the global Total to avoid a redundant column.
+    # Mirrors the same hasShowTotal logic in datatable-editor.html buildBannerTree.
+    _has_show_total = any(e.get("show_total") for e in config.get("banner", []))
+
     columns: list[BannerColumn] = []
 
     for entry in config.get("banner", []):
@@ -112,14 +221,16 @@ def build_banner(
 
         # ── Total ──────────────────────────────────────────────────────────────
         # Detect Total: no "groups", no "question", no "cross" key.
+        # Suppressed when any question-level entry uses show_total (each has its own Total).
         if "groups" not in entry and "question" not in entry and "cross" not in entry:
-            columns.append(BannerColumn(
-                group_label=group_label,
-                subgroup_label="Total",
-                letter="",
-                mask=pd.Series(True, index=df.index),
-                is_total=True,
-            ))
+            if not _has_show_total:
+                columns.append(BannerColumn(
+                    group_label=group_label,
+                    subgroup_label="Total",
+                    letter="",
+                    mask=pd.Series(True, index=df.index),
+                    is_total=True,
+                ))
             continue
 
         # ── N-way cross-tab (via "cross" key) ──────────────────────────────────
@@ -205,6 +316,15 @@ def build_banner(
                     is_total=False,
                 ))
                 letter_idx += 1
+            continue
+
+        # ── Multi-level / show_total banner (via "levels" or "show_total" key) ──────
+        # Triggered when the entry declares:
+        #   "levels": [...]   → multi-level nesting (Lv2, Lv3, …)
+        #   "show_total": true → add a Total sub-column before the groups
+        # Uses the recursive _expand_with_levels helper (mirrors JS buildBannerTree).
+        if "levels" in entry or entry.get("show_total"):
+            columns.extend(_expand_with_levels(entry, group_label))
             continue
 
         # ── Regular banner / manual cross-tab (via "groups" key) ───────────────

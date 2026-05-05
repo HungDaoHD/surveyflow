@@ -1858,6 +1858,14 @@ function buildLevelChildren(parentRows, levelItem, nextLevels) {
   const groups = levelItem.groups || [];
   const nodes  = [];
 
+  // show_total → Total sub-column FIRST (left side)
+  if (levelItem.show_total) {
+    const node = { label: 'Total', rows: parentRows, children: [], isSubTotal: true };
+    if (nextLevels.length)
+      node.children = buildLevelChildren(parentRows, nextLevels[0], nextLevels.slice(1));
+    nodes.push(node);
+  }
+
   if (!groups.length) {
     // No groups at this level → single pass-through child node
     const node = { label: levelItem.label || levelItem.question, rows: parentRows, children: [] };
@@ -1874,30 +1882,29 @@ function buildLevelChildren(parentRows, levelItem, nextLevels) {
     }
   }
 
-  // show_total → append a Total sub-column after groups
-  if (levelItem.show_total) {
-    const node = { label: 'Total', rows: parentRows, children: [], isSubTotal: true };
-    if (nextLevels.length)
-      node.children = buildLevelChildren(parentRows, nextLevels[0], nextLevels.slice(1));
-    nodes.push(node);
-  }
-
   return nodes;
 }
 
 // Build the full banner tree (array of root nodes)
 function buildBannerTree(banner) {
   const roots = [];
+
+  // If any question-level item has show_total:true, each question already has its own
+  // Total sub-column → suppress the global Total to avoid a redundant leftmost column.
+  // If no item uses show_total, the global Total { filter:null } is shown leftmost.
   const hasShowTotal = banner.some(it => it.show_total);
 
-  // Single pass — preserve original banner order
+  // Pass 1 — global Total always first (left-most column)
   for (const item of banner) {
     if (item.filter === null && !item.question) {
-      // Total placeholder — keep its natural position
       if (!hasShowTotal)
         roots.push({ label: 'Total', rows: rawCsv, children: [] });
-      continue;
     }
+  }
+
+  // Pass 2 — question-based banner items
+  for (const item of banner) {
+    if (item.filter === null && !item.question) continue;
 
     const col         = qToCol(item.question);
     const groups      = item.groups  || [];
@@ -1920,18 +1927,18 @@ function buildBannerTree(banner) {
         node.children = buildLevelChildren(rawCsv, levels[0], levels.slice(1));
       lv1Children.push(node);
     } else {
+      // show_total → Total FIRST (left side) before groups
+      if (item.show_total) {
+        const node = { label: 'Total', rows: rawCsv, children: [], isSubTotal: true };
+        if (levels.length)
+          node.children = buildLevelChildren(rawCsv, levels[0], levels.slice(1));
+        lv1Children.push(node);
+      }
       for (const g of groups) {
         const rows = filterRowsByGroup(rawCsv, col, g);
         const node = { label: g.label, rows, children: [] };
         if (levels.length)
           node.children = buildLevelChildren(rows, levels[0], levels.slice(1));
-        lv1Children.push(node);
-      }
-      // show_total → Total after all Lv1 groups
-      if (item.show_total) {
-        const node = { label: 'Total', rows: rawCsv, children: [], isSubTotal: true };
-        if (levels.length)
-          node.children = buildLevelChildren(rawCsv, levels[0], levels.slice(1));
         lv1Children.push(node);
       }
     }

@@ -52,3 +52,9 @@ Thumbs.db
 *.env.local
 .pypirc
 step4_form.html
+
+
+# Others
+priority.png
+publish note.txt
+

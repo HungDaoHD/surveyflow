@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 
 from surveyflow.core.base import Step
 from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows
-from surveyflow.steps.table.table_generator import StubBlock, StubRow, RowGroupBlock, compute_table
+from surveyflow.steps.table.table_generator import StubBlock, StubRow, RowGroupBlock, RankingBlock, compute_table
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +394,23 @@ def _write_sheet(
             # Sub-blocks (one per question item) — rendered with subdued header
             for sub_block in block.sub_blocks:
                 cur = _write_block(sub_block, cur, is_sub=True)
+
+        elif isinstance(block, RankingBlock):
+            if block.mode == "any_rank":
+                # Flat MA-style — render the single sub_block as a normal block
+                cur = _write_block(block.sub_blocks[0], cur, is_sub=False)
+            else:
+                # rank_dist — navy section header then one sub-block per rank position
+                last_col = DATA_COL + len(slots) - 1
+                _merge(ws, cur, 1, cur, last_col)
+                _set(ws, cur, 1,
+                     f"{block.question_code}  {block.question_label} (ranking)",
+                     font=_WHITE_BOLD, fill=_F_GROUP, align=_L,
+                     border=_brd(thick_bottom=True))
+                ws.row_dimensions[cur].height = 18
+                cur += 1
+                for sub_block in block.sub_blocks:
+                    cur = _write_block(sub_block, cur, is_sub=True)
 
         else:
             cur = _write_block(block, cur, is_sub=False)

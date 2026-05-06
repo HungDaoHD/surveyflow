@@ -61,11 +61,25 @@ class RowGroupBlock:
     sub_blocks: list[StubBlock]
 
 
+@dataclass
+class RankingBlock:
+    """Ranking question — one section per question, sub_blocks per rank position or flat.
+
+    mode = "rank_dist"  → sub_blocks[0] = Rank 1, sub_blocks[1] = Rank 2, …
+    mode = "any_rank"   → sub_blocks[0] = flat MA-style (choice ranked at any position)
+    """
+    question_code:  str
+    question_label: str
+    answer_type:    str               # always "ranking"
+    mode:           str               # "rank_dist" | "any_rank"
+    sub_blocks:     list[StubBlock]
+
+
 # ── Significance test ──────────────────────────────────────────────────────────
 
 def _binary_array(sub: pd.DataFrame, col: str, code: str, atype: str) -> np.ndarray:
     """Return float 0/1 array: 1 if respondent selected *code*, else 0."""
-    if atype == "MA":
+    if atype in ("MA", "ranking"):
         return sub[col].apply(
             lambda v: 1.0
             if pd.notna(v) and str(v).strip() != "" and code in str(v).split(";")
@@ -229,6 +243,40 @@ def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
                 pass
             parts.append(p)
         return code in parts
+    return _safe_sum(sub[col].apply(_check))
+
+
+# ── Ranking-specific count helpers ────────────────────────────────────────────
+
+def _code_count_rank_any(sub: pd.DataFrame, col: str, code: str) -> int:
+    """Count rows where *code* appears at ANY rank position (identical to MA logic)."""
+    return _code_count_mc(sub, col, code)
+
+
+def _base_count_rank_at(sub: pd.DataFrame, col: str, n: int) -> int:
+    """Count rows where the respondent gave at least *n* rank positions."""
+    def _check(v) -> bool:
+        if pd.isna(v) or str(v).strip() == "":
+            return False
+        return len(str(v).split(";")) >= n
+    return _safe_sum(sub[col].apply(_check))
+
+
+def _code_count_rank_at(sub: pd.DataFrame, col: str, code: str, position: int) -> int:
+    """Count rows where the choice at rank *position* (1-based) equals *code*."""
+    idx = position - 1
+
+    def _check(v) -> bool:
+        if pd.isna(v) or str(v).strip() == "":
+            return False
+        parts = str(v).split(";")
+        if idx >= len(parts):
+            return False
+        try:
+            return str(int(float(parts[idx].strip()))) == code
+        except (ValueError, TypeError):
+            return False
+
     return _safe_sum(sub[col].apply(_check))
 
 
@@ -420,7 +468,7 @@ def compute_table(
     sig_config: dict,
     col_map: dict[str, str] | None = None,
     q_pos_to_meta: dict[str, dict] | None = None,
-) -> list[StubBlock | RowGroupBlock]:
+) -> list[StubBlock | RowGroupBlock | RankingBlock]:
     """Compute cross-tabulation blocks.
 
     Parameters
@@ -437,7 +485,7 @@ def compute_table(
     def _get_meta(q: str) -> dict | None:
         return q_pos_to_meta.get(q) if q_pos_to_meta else None
 
-    blocks: list[StubBlock | RowGroupBlock] = []
+    blocks: list[StubBlock | RowGroupBlock | RankingBlock] = []
     n = len(banner_cols)
 
     for sc in stub_configs:
@@ -659,6 +707,109 @@ def compute_table(
                         question_label=f"{q_label} — {row_label}",
                         answer_type=atype,
                         rows=sub_rows,
+                    ))
+            continue
+
+        # ── Ranking question ──────────────────────────────────────────────────
+        if atype == "ranking":
+            if q_col not in df.columns:
+                continue
+
+            mode     = sc.get("ranking_mode", "rank_dist")
+            top_n    = sc.get("ranking_top_n", 0)
+            sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
+            max_pos  = top_n if top_n > 0 else len(sorted_codes)
+
+            if mode == "any_rank":
+                # ── MA-style: each choice → % ranked at any position ──────
+                any_bases: dict[int, int] = {
+                    i: _base_count(df[bc.mask], q_col)
+                    for i, bc in enumerate(banner_cols)
+                }
+                any_rows: list[StubRow] = []
+                for stat in DEFAULT_STATS_ORDER:
+                    if stat not in req_stats:
+                        continue
+                    if stat == "base":
+                        any_rows.append(StubRow(
+                            label="Base", row_type="base",
+                            counts=dict(any_bases),
+                            values={i: float(v) for i, v in any_bases.items()},
+                        ))
+                    elif stat == "percent":
+                        for code in sorted_codes:
+                            cnts: dict[int, int]   = {}
+                            pcts: dict[int, float] = {}
+                            for i, bc in enumerate(banner_cols):
+                                sub  = df[bc.mask]
+                                base = any_bases[i]
+                                cnt  = _code_count_rank_any(sub, q_col, code)
+                                cnts[i] = cnt
+                                pcts[i] = cnt / base if base else 0.0
+                            sig = _compute_sig_marks(
+                                q_col, code, "ranking", df, banner_cols, sig_config
+                            )
+                            any_rows.append(StubRow(
+                                label=_choice_label(choices_i18n, code), row_type="percent",
+                                counts=cnts, values=pcts, sig_marks=sig, code=code,
+                            ))
+                flat_block = StubBlock(
+                    question_code=q.upper(), question_label=q_label,
+                    answer_type="ranking", rows=any_rows,
+                )
+                blocks.append(RankingBlock(
+                    question_code=q.upper(), question_label=q_label,
+                    answer_type="ranking", mode="any_rank",
+                    sub_blocks=[flat_block],
+                ))
+
+            else:
+                # ── rank_dist: one StubBlock per rank position ────────────
+                rank_sub_blocks: list[StubBlock] = []
+                for n in range(1, max_pos + 1):
+                    rank_bases: dict[int, int] = {
+                        i: _base_count_rank_at(df[bc.mask], q_col, n)
+                        for i, bc in enumerate(banner_cols)
+                    }
+                    rank_rows: list[StubRow] = []
+                    for stat in DEFAULT_STATS_ORDER:
+                        if stat not in req_stats:
+                            continue
+                        if stat == "base":
+                            rank_rows.append(StubRow(
+                                label="Base", row_type="base",
+                                counts=dict(rank_bases),
+                                values={i: float(v) for i, v in rank_bases.items()},
+                            ))
+                        elif stat == "percent":
+                            for code in sorted_codes:
+                                cnts = {}
+                                pcts = {}
+                                for i, bc in enumerate(banner_cols):
+                                    sub  = df[bc.mask]
+                                    base = rank_bases[i]
+                                    cnt  = _code_count_rank_at(sub, q_col, code, n)
+                                    cnts[i] = cnt
+                                    pcts[i] = cnt / base if base else 0.0
+                                sig = _compute_sig_marks(
+                                    q_col, code, "ranking", df, banner_cols, sig_config
+                                )
+                                rank_rows.append(StubRow(
+                                    label=_choice_label(choices_i18n, code), row_type="percent",
+                                    counts=cnts, values=pcts, sig_marks=sig, code=code,
+                                ))
+                    if rank_rows:
+                        rank_sub_blocks.append(StubBlock(
+                            question_code=f"RANK{n}",
+                            question_label=f"Rank {n}",
+                            answer_type="ranking",
+                            rows=rank_rows,
+                        ))
+                if rank_sub_blocks:
+                    blocks.append(RankingBlock(
+                        question_code=q.upper(), question_label=q_label,
+                        answer_type="ranking", mode="rank_dist",
+                        sub_blocks=rank_sub_blocks,
                     ))
             continue
 

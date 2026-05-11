@@ -191,9 +191,10 @@ def build_banner(
 
         all_rows = pd.Series(True, index=df.index)
 
-        # Lv1 — show_total: add "Total" FIRST (left-most), then each group
+        # Lv1 — show_total: add "Total" FIRST using rows where banner question is not null
         if show_total1 and lv1_groups:
-            _recurse(all_rows, levels, ["Total"])
+            not_null_mask = df[lv1_col].notna()
+            _recurse(not_null_mask, levels, ["Total"])
 
         if not lv1_groups:
             # No Lv1 groups → single pass-through node

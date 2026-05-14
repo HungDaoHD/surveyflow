@@ -51,6 +51,7 @@ Thumbs.db
 .env
 *.env.local
 .pypirc
+.mcp_token.json
 step4_form.html
 
 
@@ -58,3 +59,4 @@ step4_form.html
 priority.png
 publish note.txt
 *.toml
+debug_auth.py

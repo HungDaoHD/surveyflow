@@ -65,11 +65,21 @@ If files exist → ask user:
 
 If files do not exist → fetch immediately (no need to ask):
 ```
-get_survey_definition(survey_id)        →  save to output/SURVEY_NAME/mcp/definition.json
-get_survey_rows(survey_id, offset=0)    →  save to output/SURVEY_NAME/mcp/rows_page_1.json
-get_survey_rows(survey_id, offset=200)  →  save to output/SURVEY_NAME/mcp/rows_page_2.json
-... keep fetching until has_more = false
+get_survey_definition(survey_id)
+  → save to output/SURVEY_NAME/mcp/definition.json
+
+get_survey_rows(survey_id, date_from="2020-01-01", date_to="2030-12-31", format="code", offset=0,   limit=200, profile_status=["approved"])
+  → save to output/SURVEY_NAME/mcp/rows_page_1.json
+
+get_survey_rows(survey_id, date_from="2020-01-01", date_to="2030-12-31", format="code", offset=200, limit=200, profile_status=["approved"])
+  → save to output/SURVEY_NAME/mcp/rows_page_2.json
+
+... keep fetching (offset += 200) until has_more = false in pagination
 ```
+
+> ⚠️ **`get_survey_rows` yêu cầu bắt buộc `date_from` và `date_to` (YYYY-MM-DD).**
+> Luôn dùng `date_from="2020-01-01"` và `date_to="2030-12-31"` để lấy toàn bộ data.
+> Không bao giờ dùng `prepare_survey_data_file` — luôn dùng `get_survey_definition` + `get_survey_rows`.
 
 > ⚠️ **MCP trả về structuredContent (dict), không phải plain text.**
 > Dùng Write tool để ghi file — nội dung là `json.dumps(result, ensure_ascii=False, indent=2)`.
@@ -409,4 +419,33 @@ output/SURVEY_NAME/
 
 ## Profile status
 Default: `approved` only.
-Override: `--profile-status approved,pending`
+- Pipeline CLI: `--profile-status approved,pending`
+- MCP tool call: `profile_status=["approved"]` (array, not string)
+
+---
+
+## QMe MCP tool reference
+
+> Chỉ dùng 2 tools này để fetch data. Không dùng `prepare_survey_data_file`.
+
+### get_survey_definition
+```
+Required: survey_id (integer)
+```
+
+### get_survey_rows
+```
+Required: survey_id (integer)
+          date_from  (string YYYY-MM-DD)  ← bắt buộc, dùng "2020-01-01"
+          date_to    (string YYYY-MM-DD)  ← bắt buộc, dùng "2030-12-31"
+Optional: offset          (integer, default 0)
+          limit           (integer, default 200, max 200)
+          format          (string "code" | "text", dùng "code" cho ingestion)
+          profile_status  (array, ví dụ ["approved"] hoặc ["approved","pending"])
+```
+Pagination: lặp lại với `offset += 200` cho đến khi `result["pagination"]["has_more"] == false`.
+
+### search_surveys (dùng khi tìm survey_id)
+```
+Optional: query (string), status (array), offset, limit
+```

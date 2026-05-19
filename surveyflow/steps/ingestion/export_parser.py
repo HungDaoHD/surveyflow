@@ -85,6 +85,52 @@ def _encode_ma_group(df, cols: list) -> None:
     df[cols] = filled
 
 
+# ── Multiplenumber group detection ───────────────────────────────────────────
+
+_SUB_IDX_RE = re.compile(r"^Q\d+_(\d+)$")
+
+
+def _patch_multiplenumber_headers(header: list, sub_labels: list) -> list:
+    """Rename multiplenumber group columns so each choice gets its own label.
+
+    In data_export.csv a multiplenumber question (e.g. D2 with 2 choices)
+    appears as:
+      header:    ['D2',    '',      ...]
+      sub-label: ['Q25_1', 'Q25_2', ...]
+
+    This renames them to ['D2_1', 'D2_2', ...] so all choice columns are
+    preserved.  Detection rule: a non-empty header column has sub-label
+    ``Q{n}_1`` and the following columns have empty headers with sub-labels
+    ``Q{n}_2``, ``Q{n}_3``, … (same Q-base).
+    """
+    patched = list(header)
+    i = 0
+    while i < len(patched):
+        h = patched[i]
+        s = sub_labels[i] if i < len(sub_labels) else ""
+        m = _SUB_IDX_RE.match(s)
+        if h and m and m.group(1) == "1":
+            q_base = s[: s.rfind("_")]   # e.g. 'Q25'
+            group  = [i]
+            j = i + 1
+            while j < len(patched):
+                hj = patched[j]
+                sj = sub_labels[j] if j < len(sub_labels) else ""
+                mj = _SUB_IDX_RE.match(sj)
+                if hj == "" and mj and sj.startswith(q_base + "_"):
+                    group.append(j)
+                    j += 1
+                else:
+                    break
+            if len(group) > 1:
+                for k, col_idx in enumerate(group, 1):
+                    patched[col_idx] = f"{h}_{k}"
+            i = j
+        else:
+            i += 1
+    return patched
+
+
 # ── Step 1: parse raw export CSV ─────────────────────────────────────────────
 
 def parse_export_csv(data_export: pathlib.Path) -> "pd.DataFrame":
@@ -99,7 +145,9 @@ def parse_export_csv(data_export: pathlib.Path) -> "pd.DataFrame":
         Line 5   : blank / sub-info          ← skipped
         Line 6   : blank                     ← skipped
         Line 7   : COLUMN HEADERS            ← used
-        Lines 8–12: sub-header annotations   ← skipped
+        Line 8   : blank                     ← skipped
+        Line 9   : sub-header annotations    ← used for multiplenumber detection
+        Lines 10–12: further annotations     ← skipped
         Lines 13+: alternating data / blank  ← data rows (blanks skipped)
     """
     import pandas as pd
@@ -107,10 +155,14 @@ def parse_export_csv(data_export: pathlib.Path) -> "pd.DataFrame":
     with open(data_export, encoding="utf-8-sig") as f:
         lines = f.read().splitlines()
 
-    HEADER_IDX    = 6    # line 7 (0-indexed)
-    FIRST_DATA_IDX = 12  # line 13
+    HEADER_IDX     = 6    # line 7 (0-indexed)
+    SUB_LABEL_IDX  = 8    # line 9 — sub-header with Q{n}_1, Q{n}_2 …
+    FIRST_DATA_IDX = 12   # line 13
 
-    header = lines[HEADER_IDX].split(",")
+    header     = lines[HEADER_IDX].split(",")
+    sub_line   = lines[SUB_LABEL_IDX] if len(lines) > SUB_LABEL_IDX else ""
+    sub_labels = sub_line.split(",") if sub_line else []
+    header     = _patch_multiplenumber_headers(header, sub_labels)
 
     data_rows = []
     for line in lines[FIRST_DATA_IDX:]:
@@ -227,6 +279,17 @@ def convert_export_to_rawdata(
                     row_groups.setdefault(rn, []).append(c)
             for row_cols in row_groups.values():
                 _encode_ma_group(df, row_cols)
+        elif atype == "multiplenumber":
+            group = [c for c in df.columns
+                     if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)]
+            for col in group:
+                import pandas as _pd
+                df[col] = (
+                    df[col].astype(str)
+                    .str.replace(r"[%\s]", "", regex=True)
+                    .replace("", None)
+                    .pipe(_pd.to_numeric, errors="coerce")
+                )
 
     return df
 

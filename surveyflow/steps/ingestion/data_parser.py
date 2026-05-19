@@ -248,7 +248,7 @@ def parse_rows(
         Built from metadata by the caller (IngestionStep).
     """
     if profile_status is None:
-        profile_status = ["approved"]
+        profile_status = ["approved", "pending"]
 
     allowed         = {s.lower() for s in profile_status} if profile_status else None
     def_questions   = definition.get("questions", [])

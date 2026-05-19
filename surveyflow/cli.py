@@ -6,31 +6,39 @@ Also callable directly via ``python run_pipeline.py`` in the project root.
 Folder layout
 -------------
 output/SURVEY_NAME/
-├── mcp/                ← definition.json + rows_page_*.json (from QMe MCP)
+├── mcp/                ← definition.json + rows_page_*.json OR data_export.csv
 ├── data/               ← rawdata.csv + metadata.json (generated once from mcp/)
 ├── datatable/          ← datatable.json (managed by Claude)
 ├── v1/                 ← datatable.xlsx only
 └── v2/
 
-Usage — first run (ingestion + table)::
+Usage — old mode (get_survey_rows)::
 
     surveyflow-run \\
-        --mcp-dir         output/VN8947/mcp        \\
-        --output-dir      output/VN8947             \\
-        --version         v1
+        --mcp-dir    output/VN8947/mcp \\
+        --output-dir output/VN8947     \\
+        --version    v1
 
-Usage — table-only (data/ already exists, just update datatable.xlsx)::
-
-    surveyflow-run \\
-        --output-dir      output/VN8947             \\
-        --version         v2
-
-Usage — force re-ingestion (fetch new data)::
+Usage — new mode (prepare_survey_data_file)::
 
     surveyflow-run \\
-        --mcp-dir         output/VN8947/mcp        \\
-        --output-dir      output/VN8947             \\
-        --version         v3                        \\
+        --mcp-dir    output/VN8947/mcp              \\
+        --export-csv output/VN8947/mcp/data_export.csv \\
+        --output-dir output/VN8947                  \\
+        --version    v1
+
+Usage — table-only (data/ already exists)::
+
+    surveyflow-run \\
+        --output-dir output/VN8947 \\
+        --version    v2
+
+Usage — force re-ingestion::
+
+    surveyflow-run \\
+        --mcp-dir         output/VN8947/mcp \\
+        --output-dir      output/VN8947     \\
+        --version         v3                \\
         --force-ingestion
 """
 from __future__ import annotations
@@ -44,8 +52,8 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
-def _load_mcp(mcp_dir: Path) -> tuple[dict, list[dict]]:
-    """Load definition.json + rows_page_*.json from *mcp_dir*."""
+def _load_mcp_rows(mcp_dir: Path) -> tuple[dict, list[dict]]:
+    """Old mode: load definition.json + rows_page_*.json from *mcp_dir*."""
     def_path = mcp_dir / "definition.json"
     if not def_path.exists():
         raise FileNotFoundError(f"definition.json not found in {mcp_dir}")
@@ -70,8 +78,28 @@ def _load_mcp(mcp_dir: Path) -> tuple[dict, list[dict]]:
             json.dump(page, f, ensure_ascii=False, indent=2)
         rows_pages.append(page)
 
-    logging.info("Loaded definition + %d code page(s) from %s", len(rows_pages), mcp_dir)
+    logging.info("Loaded definition + %d row page(s) from %s", len(rows_pages), mcp_dir)
     return definition, rows_pages
+
+
+def _load_mcp_export(mcp_dir: Path, export_csv: Path) -> tuple[dict, "pd.DataFrame"]:
+    """New mode: load definition.json + parse data_export.csv."""
+    from surveyflow.steps.ingestion.export_parser import parse_export_csv
+
+    def_path = mcp_dir / "definition.json"
+    if not def_path.exists():
+        raise FileNotFoundError(f"definition.json not found in {mcp_dir}")
+    if not export_csv.exists():
+        raise FileNotFoundError(f"export CSV not found: {export_csv}")
+
+    with def_path.open(encoding="utf-8") as f:
+        definition = json.load(f)
+    with def_path.open("w", encoding="utf-8") as f:
+        json.dump(definition, f, ensure_ascii=False, indent=2)
+
+    export_df = parse_export_csv(export_csv)
+    logging.info("Loaded definition + export CSV (%d rows) from %s", len(export_df), mcp_dir)
+    return definition, export_df
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -84,7 +112,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--mcp-dir",
         default=None,
-        help="Folder with definition.json + rows_page_*.json (required for ingestion)",
+        help="Folder with definition.json (required for ingestion in both modes)",
+    )
+    parser.add_argument(
+        "--export-csv",
+        default=None,
+        help="Path to data_export.csv (new mode: prepare_survey_data_file). "
+             "If omitted, old mode (rows_page_*.json) is used.",
     )
     parser.add_argument(
         "--output-dir",
@@ -122,19 +156,26 @@ def main(argv: list[str] | None = None) -> None:
     data_dir   = Path(args.data_dir) if args.data_dir else output_dir / "data"
     statuses   = [s.strip() for s in args.profile_status.split(",") if s.strip()]
 
-    # Auto-detect whether to run ingestion
-    rawdata_exists  = (data_dir / "rawdata.csv").exists()
-    skip_ingestion  = rawdata_exists and not args.force_ingestion
+    rawdata_exists = (data_dir / "rawdata.csv").exists()
+    skip_ingestion = rawdata_exists and not args.force_ingestion
 
-    # Load MCP files when ingestion is needed
-    definition, rows_pages = None, None
+    # ── Load source files when ingestion is needed ─────────────────────────────
+    definition, rows_pages, export_df = None, None, None
+
     if not skip_ingestion:
         if not args.mcp_dir:
             parser.error(
                 "--mcp-dir is required when ingestion needs to run "
                 f"(data not found at {data_dir} or --force-ingestion was set)"
             )
-        definition, rows_pages = _load_mcp(Path(args.mcp_dir))
+        mcp_dir = Path(args.mcp_dir)
+
+        if args.export_csv:
+            # New mode: definition + data_export.csv
+            definition, export_df = _load_mcp_export(mcp_dir, Path(args.export_csv))
+        else:
+            # Old mode: definition + rows_page_*.json
+            definition, rows_pages = _load_mcp_rows(mcp_dir)
 
     # Resolve datatable config path
     datatable_config = args.datatable_config
@@ -146,6 +187,7 @@ def main(argv: list[str] | None = None) -> None:
     result = Pipeline(PipelineConfig(
         definition       = definition,
         rows_pages       = rows_pages,
+        export_df        = export_df,
         output_dir       = str(output_dir),
         data_dir         = str(data_dir),
         skip_ingestion   = skip_ingestion,

@@ -6,12 +6,35 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 
-def _ma_contains(series: pd.Series, code: str) -> pd.Series:
-    """Return boolean mask: True where *code* appears in semicolon-separated MA column."""
-    return series.apply(
-        lambda v: code in str(v).split(";")
-        if pd.notna(v) and str(v).strip() != "" else False
-    )
+# ── Module-level utilities ─────────────────────────────────────────────────────
+
+def _sub_col_for_row(meta: dict | None, row_code: str, fallback: str) -> str:
+    """Resolve the actual df column for a matrix row from sub_questions.rawdata_columns."""
+    if not meta:
+        return fallback
+    for sm in meta.get("sub_questions", {}).values():
+        if str(sm.get("row_index", "")) == str(row_code):
+            rc = sm.get("rawdata_columns", [])
+            return rc[0] if rc else sm.get("label", fallback)
+    return fallback
+
+
+def _ma_col_map(rawdata_cols: list[str]) -> dict[str, str]:
+    """Map choice_code (str) → binary df column, derived from rawdata_columns.
+
+    Example
+    -------
+    ["S12_1", "S12_2", "S12_9"]  →  {"1": "S12_1", "2": "S12_2", "9": "S12_9"}
+
+    Uses the suffix after the last underscore as the code key.
+    Columns whose suffix is not purely numeric (e.g. open-text ``_o9``) are skipped.
+    """
+    result: dict[str, str] = {}
+    for col in rawdata_cols:
+        parts = col.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            result[parts[1]] = col
+    return result
 
 
 def _letter(i: int) -> str:
@@ -34,6 +57,23 @@ class BannerColumn:
     level_labels:    list[str]  = field(default_factory=list)
     matrix_row_code:  str | None       = None  # single row → paired mode
     matrix_row_codes: list[str] | None = None  # multiple rows → stacked paired mode
+
+    def to_dict(self) -> dict:
+        """Serialisable representation for JSON/preview API.
+
+        Excludes non-serialisable fields: ``mask`` (pd.Series) and
+        paired-mode fields ``matrix_row_code`` / ``matrix_row_codes``
+        (internal xlsx rendering detail, not needed by consumers).
+        """
+        return {
+            "label":        self.subgroup_label,
+            "group_label":  self.group_label,
+            "level_labels": self.level_labels,
+            "letter":       self.letter,
+            "is_total":     self.is_total,
+            "n":            int(self.mask.sum()),
+        }
+
     # Header display rules:
     # level_labels = []                 → plain: group(5) / detail(6)
     # level_labels = ["A"]              → 2-level: group(5) / A(6) / detail(7)
@@ -54,48 +94,89 @@ def build_banner(
     Parameters
     ----------
     col_map
-        Optional mapping from datatable ``question`` references (``"Q1"``)
-        to the actual column name in *df* (the question's ``label``).
-        When ``None`` the reference is used as-is.
+        Maps question reference (``"Q1"``) → primary df column name.
+        Built by ``_build_lookup_maps``; when ``None`` the reference is used as-is.
     q_pos_to_meta
-        Optional mapping from question reference → metadata entry dict.
-        Used to detect MA questions and apply the correct mask logic,
-        and to look up choice labels for ``cross`` banners.
+        Maps question reference → full metadata entry dict.
+        Required for correct MA binary handling and choice label look-ups.
     """
 
     def _resolve(q: str) -> str:
+        """Resolve a question reference to its primary df column name."""
         return col_map[q] if col_map and q in col_map else q
 
-    def _is_ma(q_ref: str) -> bool:
+    def _get_meta(q_ref: str) -> dict:
+        """Return metadata for a question (empty dict if not found)."""
         if not q_pos_to_meta:
-            return False
-        meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref))
-        return (meta or {}).get("answer_type") == "MA"
+            return {}
+        return q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref)) or {}
 
-    def _make_mask(q_ref: str, col: str, value: int | None, values: list | None) -> pd.Series:
-        """Build respondent mask for one banner group, handling SA and MA."""
-        if _is_ma(q_ref):
+    def _make_mask(q_ref: str, value: int | None, values: list | None) -> pd.Series:
+        """Build respondent mask for one banner group.
+
+        Reads rawdata_columns from q_pos_to_meta — no hardcoded column conventions.
+
+        SA / NUM  : single primary column, equality / isin filter.
+        MA binary : per-choice binary columns from rawdata_columns (value == 1).
+        """
+        meta         = _get_meta(q_ref)
+        atype        = meta.get("answer_type", "SA")
+        rawdata_cols = meta.get("rawdata_columns", [])
+
+        if atype == "MA":
+            col_for_code = _ma_col_map(rawdata_cols)
             if value is not None:
-                return _ma_contains(df[col], str(value))
+                c = col_for_code.get(str(value))
+                if c and c in df.columns:
+                    return pd.to_numeric(df[c], errors="coerce").fillna(0) == 1
+                return pd.Series(False, index=df.index)
             elif values:
-                codes = [str(v) for v in values]
-                return df[col].apply(
-                    lambda v: any(c in str(v).split(";") for c in codes)
-                    if pd.notna(v) and str(v).strip() != "" else False
-                )
+                mask = pd.Series(False, index=df.index)
+                for v in values:
+                    c = col_for_code.get(str(v))
+                    if c and c in df.columns:
+                        mask = mask | (pd.to_numeric(df[c], errors="coerce").fillna(0) == 1)
+                return mask
             return pd.Series(False, index=df.index)
-        else:
+
+        else:  # SA / NUM / etc.
+            col = rawdata_cols[0] if rawdata_cols else _resolve(q_ref)
+            if not col or col not in df.columns:
+                return pd.Series(False, index=df.index)
             if value is not None:
                 return df[col] == value
             elif values:
                 return df[col].isin(values)
             return pd.Series(False, index=df.index)
 
+    def _answered_mask(q_ref: str) -> pd.Series:
+        """Return mask of respondents who answered q_ref at all.
+
+        Used for show_total sub-columns: covers everyone who has any valid response
+        for that question, regardless of which choice they picked.
+
+        SA  : primary column is not null.
+        MA  : at least one binary choice column == 1.
+        """
+        meta         = _get_meta(q_ref)
+        atype        = meta.get("answer_type", "SA")
+        rawdata_cols = meta.get("rawdata_columns", [])
+
+        if atype == "MA":
+            mask = pd.Series(False, index=df.index)
+            for c in rawdata_cols:
+                if c in df.columns:
+                    mask = mask | (pd.to_numeric(df[c], errors="coerce").fillna(0) == 1)
+            return mask
+        else:
+            col = rawdata_cols[0] if rawdata_cols else _resolve(q_ref)
+            if col and col in df.columns:
+                return df[col].notna()
+            return pd.Series(True, index=df.index)   # fallback: all respondents
+
     def _code_label(q_ref: str, code: int) -> str:
-        """Look up the label for a choice code from metadata."""
-        if not q_pos_to_meta:
-            return str(code)
-        meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref))
+        """Look up the display label for a choice code from metadata."""
+        meta = _get_meta(q_ref)
         if not meta:
             return str(code)
         langs = meta.get("choices_i18n", {}).get(str(code), {})
@@ -137,7 +218,6 @@ def build_banner(
         The mask is the intersection of all ancestor group filters.
         """
         lv1_q       = entry.get("question", "")
-        lv1_col     = _resolve(lv1_q) if lv1_q else ""
         lv1_groups  = entry.get("groups", [])
         levels      = entry.get("levels", [])
         show_total1 = entry.get("show_total", False)
@@ -150,13 +230,7 @@ def build_banner(
             remaining:   list[dict],
             path:        list[str],
         ) -> None:
-            """
-            parent_mask : cumulative respondent filter
-            remaining   : level items still to be processed
-            path        : labels from Lv1 to current node (root excluded)
-            """
             if not remaining:
-                # Leaf — emit one BannerColumn
                 result.append(BannerColumn(
                     group_label    = group_label,
                     subgroup_label = path[-1] if path else (entry.get("label") or group_label),
@@ -171,37 +245,29 @@ def build_banner(
             lv     = remaining[0]
             rest   = remaining[1:]
             lq     = lv.get("question", "")
-            lq_col = _resolve(lq) if lq else ""
             lgrps  = lv.get("groups", [])
             show_t = lv.get("show_total", False)
 
-            # show_total at this level → add a "Total" sibling FIRST (unfiltered)
             if show_t and lgrps:
                 _recurse(parent_mask, rest, path + ["Total"])
 
             if not lgrps:
-                # Pass-through: no filter at this level
                 _recurse(parent_mask, rest, path + [lv.get("label") or lq])
             else:
                 for g in lgrps:
-                    g_mask = parent_mask & _make_mask(
-                        lq, lq_col, g.get("value"), g.get("values")
-                    )
+                    g_mask = parent_mask & _make_mask(lq, g.get("value"), g.get("values"))
                     _recurse(g_mask, rest, path + [g["label"]])
 
         all_rows = pd.Series(True, index=df.index)
 
-        # Lv1 — show_total: add "Total" FIRST using rows where banner question is not null
         if show_total1 and lv1_groups:
-            not_null_mask = df[lv1_col].notna()
-            _recurse(not_null_mask, levels, ["Total"])
+            _recurse(_answered_mask(lv1_q), levels, ["Total"])
 
         if not lv1_groups:
-            # No Lv1 groups → single pass-through node
             _recurse(all_rows, levels, [])
         else:
             for g in lv1_groups:
-                g_mask = _make_mask(lv1_q, lv1_col, g.get("value"), g.get("values"))
+                g_mask = _make_mask(lv1_q, g.get("value"), g.get("values"))
                 _recurse(g_mask, levels, [g["label"]])
 
         return result
@@ -248,11 +314,10 @@ def build_banner(
             dim_items: list[list[dict]] = []
             for dim in dims:
                 q_ref = dim["question"]
-                q     = _resolve(q_ref)
                 items = []
                 for code in dim["values"]:
                     label = _code_label(q_ref, code)
-                    mask  = _make_mask(q_ref, q, value=code, values=None)
+                    mask  = _make_mask(q_ref, value=code, values=None)
                     items.append({"label": label, "mask": mask})
                 dim_items.append(items)
 
@@ -287,28 +352,20 @@ def build_banner(
         # Mask: respondents where Q13_1_r{code} is not NaN (have any response for that row).
         if entry.get("use_matrix_rows"):
             q_ref = entry["question"]
-            q     = _resolve(q_ref)
-            meta  = None
-            if q_pos_to_meta:
-                meta = q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(q)
-
-            rows: dict = {}
-            if meta:
-                rows = meta.get("choices_i18n", {}).get("rows", {})
+            meta  = _get_meta(q_ref)
+            rows: dict = meta.get("choices_i18n", {}).get("rows", {})
 
             letter_idx = 0
             for row_code, label_raw in rows.items():
-                if isinstance(label_raw, dict):
-                    row_label = label_raw.get("vi") or label_raw.get("en") or row_code
-                else:
-                    row_label = str(label_raw)
-
-                col_name = f"{q}_r{row_code}"
-                if col_name in df.columns:
-                    mask = df[col_name].notna()
-                else:
-                    mask = pd.Series(False, index=df.index)
-
+                row_label = (
+                    label_raw.get("vi") or label_raw.get("en") or row_code
+                    if isinstance(label_raw, dict) else str(label_raw)
+                )
+                col_name = _sub_col_for_row(meta, row_code, f"{_resolve(q_ref)}_r{row_code}")
+                mask = (
+                    df[col_name].notna() if col_name in df.columns
+                    else pd.Series(False, index=df.index)
+                )
                 columns.append(BannerColumn(
                     group_label=group_label,
                     subgroup_label=row_label,
@@ -350,17 +407,15 @@ def build_banner(
                 mask = pd.Series(True, index=df.index)
                 for cond in grp["conditions"]:
                     cq_ref = cond["question"]
-                    cq     = _resolve(cq_ref)
                     mask   = mask & _make_mask(
-                        cq_ref, cq,
+                        cq_ref,
                         value=cond.get("value"),
                         values=cond.get("values"),
                     )
             else:
                 q_ref = entry["question"]
-                q     = _resolve(q_ref)
                 mask  = _make_mask(
-                    q_ref, q,
+                    q_ref,
                     value=grp.get("value"),
                     values=grp.get("values"),
                 )
@@ -429,7 +484,7 @@ def nest_banner_with_matrix_rows(
             label = grp["label"]
             if "row_code" in grp:
                 rc       = str(grp["row_code"])
-                col_name = f"{q}_r{rc}"
+                col_name = _sub_col_for_row(meta, rc, f"{q}_r{rc}")
                 mask     = df[col_name].notna() if col_name in df.columns \
                            else pd.Series(False, index=df.index)
                 brand_items.append({"label": label, "mask": mask,
@@ -438,7 +493,7 @@ def nest_banner_with_matrix_rows(
                 rcs  = [str(c) for c in grp.get("row_codes", [])]
                 mask = pd.Series(False, index=df.index)
                 for rc in rcs:
-                    col_name = f"{q}_r{rc}"
+                    col_name = _sub_col_for_row(meta, rc, f"{q}_r{rc}")
                     if col_name in df.columns:
                         mask = mask | df[col_name].notna()
                 brand_items.append({"label": label, "mask": mask,
@@ -449,7 +504,7 @@ def nest_banner_with_matrix_rows(
         for row_code, label_raw in rows.items():
             label    = label_raw.get("vi") or label_raw.get("en") or row_code \
                        if isinstance(label_raw, dict) else str(label_raw)
-            col_name = f"{q}_r{row_code}"
+            col_name = _sub_col_for_row(meta, row_code, f"{q}_r{row_code}")
             mask     = df[col_name].notna() if col_name in df.columns \
                        else pd.Series(False, index=df.index)
             brand_items.append({"label": label, "mask": mask,

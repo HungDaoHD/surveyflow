@@ -67,17 +67,24 @@ class Pipeline:
         context: dict = {
             "definition":     cfg.definition,
             "rows_pages":     cfg.rows_pages,
+            "export_df":      cfg.export_df,
             "data_dir":       str(data_dir),
             "output_dir":     str(versioned_dir),   # table step writes xlsx here
             "profile_status": cfg.profile_status,
+            "skip_render":    cfg.skip_render,
+            "table_indices":  cfg.table_indices,
             "version":        version,
         }
 
         # ── Step 1: Ingestion ──────────────────────────────────────────────
         if not cfg.skip_ingestion:
-            if cfg.definition is None or cfg.rows_pages is None:
+            if cfg.definition is None:
                 raise ValueError(
-                    "definition and rows_pages are required when skip_ingestion=False"
+                    "definition is required when skip_ingestion=False"
+                )
+            if cfg.rows_pages is None and cfg.export_df is None:
+                raise ValueError(
+                    "rows_pages or export_df is required when skip_ingestion=False"
                 )
             logger.info("── Step 1: Ingestion")
             context = IngestionStep().run(context)
@@ -99,12 +106,16 @@ class Pipeline:
 
         # ── Step 2: Table (optional) ───────────────────────────────────────
         if cfg.datatable_config is not None:
-            logger.info("── Step 2: Table")
+            logger.info("── Step 2: Table — compute")
             context["df"]               = context["rawdata"]
             context["datatable_config"] = self._load_datatable_config(
                 cfg.datatable_config
             )
-            context = TableStep().run(context)
+            table_step = TableStep()
+            context = table_step.compute(context)
+            if not cfg.skip_render:
+                logger.info("── Step 2: Table — render xlsx")
+                context = table_step.render_xlsx(context)
 
         logger.info("Pipeline complete.")
         return context

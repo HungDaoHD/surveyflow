@@ -53,6 +53,8 @@ Thumbs.db
 .pypirc
 .mcp_token.json
 step4_form.html
+qme_auth.py
+main.py
 
 
 # Others

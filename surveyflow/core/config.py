@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -39,9 +39,12 @@ class PipelineConfig:
 
     definition:       Optional[dict]       = None
     rows_pages:       Optional[list[dict]] = None
+    export_df:        Optional[Any]        = None   # pd.DataFrame from parse_export_csv
     output_dir:       str                  = "."
     data_dir:         Optional[str]        = None
     skip_ingestion:   bool                 = False
-    profile_status:   list[str]            = field(default_factory=lambda: ["approved"])
+    skip_render:      bool                 = False  # True → compute only, no xlsx output
+    profile_status:   list[str]            = field(default_factory=lambda: ["approved", "pending"])
     datatable_config: Optional[str | dict] = None
     version:          Optional[str]        = None
+    table_indices:    Optional[list[int]]  = None   # None = all tables; [0,2] = only table 0 and 2

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "surveyflow"
-version = "0.4.9"
+version = "0.4.10"
 description = "Survey data pipeline: rawdata.csv + metadata.json + datatable.xlsx with sig testing"
 readme = "README.md"
 requires-python = ">=3.8"

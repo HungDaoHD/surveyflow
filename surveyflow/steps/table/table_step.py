@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -419,6 +420,41 @@ def _write_sheet(
     ws.freeze_panes = ws.cell(row=DATA_START, column=DATA_COL)
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _build_lookup_maps(metadata: dict) -> tuple[dict[str, str], dict[str, dict]]:
+    """Build col_map and q_pos_to_meta from metadata.
+
+    col_map maps question reference → actual df column name:
+      - SA / ranking / old semicolon-MA : rawdata_columns[0] (the real df column)
+      - Binary-MA (rawdata_columns len > 1): label kept as-is; callers read
+        q_meta["rawdata_columns"] directly and route per-choice to the right column.
+    """
+    col_map: dict[str, str] = {}
+    q_pos_to_meta: dict[str, dict] = {}
+    for meta in metadata.get("questions", {}).values():
+        pos = meta.get("position")
+        if pos is None:
+            continue
+        key          = f"q{pos}"
+        label        = meta.get("label") or key
+        atype        = meta.get("answer_type", "")
+        rawdata_cols = meta.get("rawdata_columns", [])
+
+        # Binary-MA: multiple rawdata_columns (one per choice code).
+        # Keep col_map pointing to label; banner / generator handle each column
+        # individually via q_meta["rawdata_columns"].
+        is_ma_binary = atype == "MA" and len(rawdata_cols) > 1
+        primary = label if is_ma_binary else (rawdata_cols[0] if rawdata_cols else label)
+
+        col_map[key]       = primary
+        q_pos_to_meta[key] = meta
+        if label and label != key:
+            col_map[label]       = primary
+            q_pos_to_meta[label] = meta
+    return col_map, q_pos_to_meta
+
+
 # ── Step ───────────────────────────────────────────────────────────────────────
 
 class TableStep(Step):
@@ -427,50 +463,57 @@ class TableStep(Step):
     --------------
     df               : pd.DataFrame
     metadata         : dict
-    datatable_config : dict
+    datatable_config : list[dict] | dict
     output_dir       : str
 
-    Context outputs
-    ---------------
+    Context outputs (compute)
+    -------------------------
+    table_results    : list[dict]   JSON-serialisable cross-tab results
+    _table_computed  : list[dict]   raw objects for render_xlsx (internal use)
+
+    Context outputs (render_xlsx)
+    -----------------------------
     datatable_path   : str
     """
 
-    def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        df          = context["df"]
-        metadata    = context["metadata"]
-        raw_config  = context["datatable_config"]
-        out_dir     = Path(context.get("output_dir", "."))
-        out_dir.mkdir(parents=True, exist_ok=True)
+    def compute(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Compute cross-tabs for selected configs. No file I/O — returns structured data.
 
-        # Normalise: datatable.json can be a single dict or an array of table configs
-        configs: list[dict] = raw_config if isinstance(raw_config, list) else [raw_config]
+        Filtering
+        ---------
+        ``context["table_indices"]`` (list[int] | None)
+            Indices into the datatable_config array to compute.
+            None (default) → compute all configs.
+        """
+        t_compute_start = time.perf_counter()
 
-        # Build lookup maps once (shared across all table configs)
-        col_map: dict[str, str] = {}
-        q_pos_to_meta: dict[str, dict] = {}
-        for meta in metadata.get("questions", {}).values():
-            pos = meta.get("position")
-            if pos is None:
-                continue
-            key   = f"q{pos}"
-            label = meta.get("label") or key
-            col_map[key]       = label
-            q_pos_to_meta[key] = meta
-            if label and label != key:
-                col_map[label]       = label
-                q_pos_to_meta[label] = meta
+        df         = context["df"]
+        metadata   = context["metadata"]
+        raw_config = context["datatable_config"]
 
-        wb = Workbook()
-        wb.remove(wb.active)   # remove default blank sheet
+        all_configs: list[dict] = raw_config if isinstance(raw_config, list) else [raw_config]
 
-        for cfg in configs:
+        # Filter to requested indices (preserve original index for reference)
+        indices = context.get("table_indices")   # list[int] | None
+        if indices is not None:
+            selected = [(i, all_configs[i]) for i in indices if 0 <= i < len(all_configs)]
+        else:
+            selected = list(enumerate(all_configs))
+
+        col_map, q_pos_to_meta = _build_lookup_maps(metadata)
+
+        computed: list[dict] = []   # raw objects → consumed by render_xlsx
+        results:  list[dict] = []   # serialised  → consumed by API / preview
+
+        for cfg_idx, (orig_idx, cfg) in enumerate(selected, 1):
             sub_title  = cfg.get("sub_title", "")
             sig_config = cfg.get("significance_test", {"enabled": False})
+            tag = f"[{cfg_idx}/{len(selected)}] {sub_title or 'config'}"
 
-            logger.info("Building banner %s…", f"({sub_title}) " if sub_title else "")
+            t0 = time.perf_counter()
+            logger.info("%s — building banner …", tag)
             banner_cols = build_banner(cfg, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta)
 
-            # If "banner_matrix" is specified, nest matrix rows within each banner column
             bm = cfg.get("banner_matrix")
             if bm:
                 banner_cols = nest_banner_with_matrix_rows(
@@ -481,37 +524,212 @@ class TableStep(Step):
                     col_map         = col_map,
                     groups          = bm.get("groups"),
                 )
+            logger.info("%s — banner: %d columns  (%.2fs)", tag, len(banner_cols),
+                        time.perf_counter() - t0)
 
-            logger.info("  → %d banner columns", len(banner_cols))
-
-            logger.info("Computing table %s…", f"({sub_title}) " if sub_title else "")
+            t0 = time.perf_counter()
+            logger.info("%s — computing cross-tabs …", tag)
             blocks = compute_table(
-                stub_configs=cfg["stub"],
-                banner_cols=banner_cols,
-                df=df,
-                metadata=metadata,
-                sig_config=sig_config,
-                col_map=col_map,
-                q_pos_to_meta=q_pos_to_meta,
+                stub_configs   = cfg["stub"],
+                banner_cols    = banner_cols,
+                df             = df,
+                metadata       = metadata,
+                sig_config     = sig_config,
+                col_map        = col_map,
+                q_pos_to_meta  = q_pos_to_meta,
             )
-            logger.info("  → %d stub blocks", len(blocks))
+            logger.info("%s — cross-tabs: %d blocks  (%.2fs)", tag, len(blocks),
+                        time.perf_counter() - t0)
+
+            computed.append({
+                "orig_idx":   orig_idx,
+                "cfg":        cfg,
+                "banner_cols": banner_cols,
+                "blocks":     blocks,
+            })
+
+        context["_table_computed"] = computed
+
+        # Always build JSON-serialisable table_results so callers (APDP preview,
+        # API, or xlsx export) can read structured data without a second compute().
+        t0 = time.perf_counter()
+        logger.info("Serialising to dict …")
+        context["table_results"] = [
+            {
+                "table_index":       item["orig_idx"],
+                "title":             item["cfg"].get("title", ""),
+                "sub_title":         item["cfg"].get("sub_title", ""),
+                "significance_test": item["cfg"].get("significance_test", {"enabled": False}),
+                "banner_cols": [bc.to_dict() for bc in item["banner_cols"]],
+                "blocks":      [b.to_dict()  for b  in item["blocks"]],
+                "tables":      item["cfg"].get("tables", []),
+            }
+            for item in computed
+        ]
+        logger.info("Serialised  (%.2fs)", time.perf_counter() - t0)
+
+        logger.info("compute() done  (%.2fs total)", time.perf_counter() - t_compute_start)
+        return context
+
+    def render_xlsx(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Write datatable.xlsx.
+
+        Source priority
+        ---------------
+        1. ``_table_computed`` — Python objects produced in the same process by
+           ``compute()``.  Fast: no reconstruction needed.
+        2. ``table_results`` — JSON produced by a prior ``compute()`` call,
+           e.g. loaded from storage in a separate APDP export job.
+           Reconstructed via ``_from_table_results()`` before rendering.
+        """
+        t_render_start = time.perf_counter()
+
+        if "_table_computed" in context:
+            computed = context["_table_computed"]
+        elif "table_results" in context:
+            logger.info("render_xlsx: reconstructing from table_results JSON …")
+            computed = self._from_table_results(context["table_results"])
+        else:
+            raise ValueError(
+                "render_xlsx() requires either '_table_computed' or 'table_results' in context."
+            )
+
+        out_dir  = Path(context.get("output_dir", "."))
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        wb = Workbook()
+        wb.remove(wb.active)
+
+        for item in computed:
+            cfg         = item["cfg"]
+            banner_cols = item["banner_cols"]
+            blocks      = item["blocks"]
+            sub_title   = cfg.get("sub_title", "")
 
             tables = cfg.get("tables", [
                 {"sheet": "Table", "cell_content": "percentage", "show_sig": False, "enabled": True}
             ])
-
             for tbl in tables:
                 if not tbl.get("enabled", True):
                     continue
                 base_name  = tbl.get("sheet", "Sheet")
                 sheet_name = f"{sub_title} - {base_name}" if sub_title else base_name
-                logger.info("Writing sheet: %s", sheet_name)
+                t0 = time.perf_counter()
+                logger.info("Writing sheet: %s …", sheet_name)
                 ws = wb.create_sheet(title=sheet_name)
                 _write_sheet(ws, cfg, tbl, banner_cols, blocks)
+                logger.info("  → %s done  (%.2fs)", sheet_name, time.perf_counter() - t0)
 
         output_path = str(out_dir / "datatable.xlsx")
+        t0 = time.perf_counter()
+        logger.info("Saving workbook …")
         wb.save(output_path)
-        logger.info("Saved → %s", output_path)
+        logger.info("Saved → %s  (%.2fs)", output_path, time.perf_counter() - t0)
+        logger.info("render_xlsx() done  (%.2fs total)", time.perf_counter() - t_render_start)
 
         context["datatable_path"] = output_path
+        return context
+
+    # ── JSON → Python object reconstruction ───────────────────────────────────
+
+    def _from_table_results(self, table_results: list[dict]) -> list[dict]:
+        """Reconstruct internal computed list from table_results JSON.
+
+        Called by render_xlsx() when _table_computed is absent — i.e. when the
+        APDP export job reads a previously stored table_results.json instead of
+        rerunning compute().
+
+        Returns a list in the same shape as _table_computed so that render_xlsx()
+        can use it without modification.
+        """
+        computed: list[dict] = []
+        for item in table_results:
+            banner_cols = [self._bc_from_dict(d)    for d in item.get("banner_cols", [])]
+            blocks      = [self._block_from_dict(d) for d in item.get("blocks", [])]
+            cfg = {
+                "title":             item.get("title", ""),
+                "sub_title":         item.get("sub_title", ""),
+                "tables":            item.get("tables", []),
+                "significance_test": item.get("significance_test", {"enabled": False}),
+            }
+            computed.append({
+                "orig_idx":    item.get("table_index", 0),
+                "cfg":         cfg,
+                "banner_cols": banner_cols,
+                "blocks":      blocks,
+            })
+        return computed
+
+    @staticmethod
+    def _bc_from_dict(d: dict) -> BannerColumn:
+        """Reconstruct BannerColumn from to_dict() output.
+
+        ``mask`` is set to an empty Series — it is only needed during compute(),
+        not during rendering, so this is safe for render_xlsx() use.
+        """
+        return BannerColumn(
+            group_label    = d.get("group_label", ""),
+            subgroup_label = d.get("label", ""),
+            letter         = d.get("letter", ""),
+            mask           = pd.Series(dtype=bool),   # dummy — not used in render
+            is_total       = d.get("is_total", False),
+            level_labels   = d.get("level_labels", []),
+        )
+
+    @staticmethod
+    def _row_from_dict(d: dict) -> StubRow:
+        """Reconstruct StubRow from to_dict() array format → internal dict format."""
+        values_arr = d.get("values", [])
+        counts_arr = d.get("counts", [])
+        sig_arr    = d.get("sig_marks", [])
+        return StubRow(
+            label     = d.get("label", ""),
+            row_type  = d.get("row_type", "percent"),
+            code      = d.get("code"),
+            values    = {i: float(v) for i, v in enumerate(values_arr)},
+            counts    = {i: int(v)   for i, v in enumerate(counts_arr)},
+            sig_marks = {i: s for i, s in enumerate(sig_arr) if s},
+        )
+
+    @staticmethod
+    def _stub_from_dict(d: dict) -> StubBlock:
+        """Reconstruct StubBlock from to_dict() output."""
+        return StubBlock(
+            question_code  = d.get("question", ""),
+            question_label = d.get("label", ""),
+            answer_type    = d.get("answer_type", ""),
+            rows           = [TableStep._row_from_dict(r) for r in d.get("rows", [])],
+        )
+
+    @staticmethod
+    def _block_from_dict(d: dict) -> StubBlock | RowGroupBlock | RankingBlock:
+        """Reconstruct the correct block type from to_dict() output.
+
+        Dispatches on ``d["type"]``:
+          "stub"      → StubBlock
+          "row_group" → RowGroupBlock  (sub_blocks → StubBlock list)
+          "ranking"   → RankingBlock   (sub_blocks → StubBlock list)
+        """
+        btype = d.get("type", "stub")
+        if btype == "row_group":
+            return RowGroupBlock(
+                row_label  = d.get("row_label", ""),
+                row_code   = d.get("row_code", ""),
+                sub_blocks = [TableStep._stub_from_dict(b) for b in d.get("sub_blocks", [])],
+            )
+        if btype == "ranking":
+            return RankingBlock(
+                question_code  = d.get("question", ""),
+                question_label = d.get("label", ""),
+                answer_type    = d.get("answer_type", "ranking"),
+                mode           = d.get("mode", "rank_dist"),
+                sub_blocks     = [TableStep._stub_from_dict(b) for b in d.get("sub_blocks", [])],
+            )
+        # default → stub
+        return TableStep._stub_from_dict(d)
+
+    def run(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Backward-compatible: compute + render_xlsx in one call."""
+        context = self.compute(context)
+        context = self.render_xlsx(context)
         return context

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as _scipy_stats
 
-from surveyflow.steps.table.banner_builder import BannerColumn
+from surveyflow.steps.table.banner_builder import BannerColumn, _ma_col_map
 
 CODEABLE_TYPES  = {"SA", "MA", "ranking"}
 MATRIX_TYPES    = {"Matrix_SA", "Matrix_MA", "Matrix_NUM"}
@@ -44,6 +44,22 @@ class StubRow:
     sig_marks: dict[int, str] = field(default_factory=dict)  # col_index → "BC" / "a"
     code: str | None = None         # numeric code for percent rows; None for stat rows
 
+    def to_dict(self) -> dict:
+        # Use ordered arrays (index 0..N-1) instead of dicts to eliminate
+        # repeated string keys and reduce JSON file size by ~60-70%.
+        n   = max((k + 1 for k in self.values), default=0)
+        sig = [self.sig_marks.get(i, "") for i in range(n)]
+        out: dict = {
+            "label":    self.label,
+            "row_type": self.row_type,
+            "code":     self.code,
+            "values":   [round(float(self.values.get(i, 0.0)), 4) for i in range(n)],
+            "counts":   [int(self.counts.get(i, 0)) for i in range(n)],
+        }
+        if any(sig):
+            out["sig_marks"] = sig
+        return out
+
 
 @dataclass
 class StubBlock:
@@ -52,6 +68,15 @@ class StubBlock:
     answer_type: str
     rows: list[StubRow]
 
+    def to_dict(self) -> dict:
+        return {
+            "type":        "stub",
+            "question":    self.question_code,
+            "label":       self.question_label,
+            "answer_type": self.answer_type,
+            "rows":        [r.to_dict() for r in self.rows],
+        }
+
 
 @dataclass
 class RowGroupBlock:
@@ -59,6 +84,14 @@ class RowGroupBlock:
     row_label: str              # e.g. "1. Castrol"
     row_code:  str              # e.g. "1"
     sub_blocks: list[StubBlock]
+
+    def to_dict(self) -> dict:
+        return {
+            "type":       "row_group",
+            "row_label":  self.row_label,
+            "row_code":   self.row_code,
+            "sub_blocks": [b.to_dict() for b in self.sub_blocks],
+        }
 
 
 @dataclass
@@ -74,21 +107,29 @@ class RankingBlock:
     mode:           str               # "rank_dist" | "any_rank"
     sub_blocks:     list[StubBlock]
 
+    def to_dict(self) -> dict:
+        return {
+            "type":        "ranking",
+            "question":    self.question_code,
+            "label":       self.question_label,
+            "answer_type": self.answer_type,
+            "mode":        self.mode,
+            "sub_blocks":  [b.to_dict() for b in self.sub_blocks],
+        }
+
 
 # ── Significance test ──────────────────────────────────────────────────────────
 
 def _binary_array(sub: pd.DataFrame, col: str, code: str, atype: str) -> np.ndarray:
-    """Return float 0/1 array: 1 if respondent selected *code*, else 0."""
-    if atype in ("MA", "ranking"):
-        return sub[col].apply(
-            lambda v: 1.0
-            if pd.notna(v) and str(v).strip() != "" and code in str(v).split(";")
-            else 0.0
-        ).to_numpy()
-    else:
-        return (
-            pd.to_numeric(sub[col], errors="coerce").fillna(-1) == int(code)
-        ).astype(float).to_numpy()
+    """Return float 0/1 array: 1 if respondent selected *code*, else 0.
+
+    All callers now pass individual numeric columns (SA, or binary MA/ranking columns)
+    so we always use numeric equality. The *atype* parameter is kept for signature
+    compatibility but is no longer used for dispatch.
+    """
+    return (
+        pd.to_numeric(sub[col], errors="coerce").fillna(-1) == int(code)
+    ).astype(float).to_numpy()
 
 
 def _compute_sig_marks(
@@ -203,6 +244,43 @@ def _compute_sig_marks(
     return {i: "".join(marks[i]) for i in range(len(banner_cols))}
 
 
+# ── New-format helpers ─────────────────────────────────────────────────────────
+
+def _sub_q_col(sub_meta: dict, fallback: str = "") -> str:
+    """Resolve the actual DataFrame column for a matrix sub-question.
+    Stored in rawdata_columns[0]; falls back to label if not set."""
+    rc = sub_meta.get("rawdata_columns", [])
+    return rc[0] if rc else sub_meta.get("label", fallback)
+
+
+def _build_row_col_map(q_meta: dict) -> dict[str, str]:
+    """Map row_index (str) → actual df column, built from sub_questions.rawdata_columns."""
+    result: dict[str, str] = {}
+    for sm in q_meta.get("sub_questions", {}).values():
+        ri = str(sm.get("row_index", ""))
+        if ri:
+            rc = sm.get("rawdata_columns", [])
+            result[ri] = rc[0] if rc else sm.get("label", "")
+    return result
+
+
+def _base_count_ma(sub: pd.DataFrame, rawdata_cols: list) -> int:
+    """Base count for binary-format MA: rows where any binary column is non-NaN."""
+    cols = [c for c in rawdata_cols if c in sub.columns]
+    if not cols:
+        return 0
+    return int(sub[cols].notna().any(axis=1).sum())
+
+
+def _code_count_ma(sub: pd.DataFrame, rawdata_cols: list, code: str) -> int:
+    """Count rows selecting *code* in binary-format MA (column == 1).
+    Uses _ma_col_map for O(1) lookup instead of linear endswith scan."""
+    col = _ma_col_map(rawdata_cols).get(code)
+    if col is None or col not in sub.columns:
+        return 0
+    return int((pd.to_numeric(sub[col], errors="coerce") == 1).sum())
+
+
 # ── Count helpers ──────────────────────────────────────────────────────────────
 
 def _safe_sum(series: pd.Series) -> int:
@@ -223,61 +301,51 @@ def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
     return _safe_sum(pd.to_numeric(sub[col], errors="coerce") == int(code))
 
 
-def _code_count_mc(sub: pd.DataFrame, col: str, code: str) -> int:
-    """Count rows where *code* appears in a semicolon-separated MA column.
-
-    Handles two storage formats produced by ingestion:
-    - Multi-select : "3;6;7"  (semicolon-separated string)
-    - Single-select: 4.0      (float, when only one option was chosen)
-    Floats are normalised to int strings before comparison.
-    """
-    def _check(v):
-        if pd.isna(v) or str(v).strip() == "":
-            return False
-        parts = []
-        for p in str(v).split(";"):
-            p = p.strip()
-            try:
-                p = str(int(float(p)))   # "4.0" → "4"
-            except (ValueError, TypeError):
-                pass
-            parts.append(p)
-        return code in parts
-    return _safe_sum(sub[col].apply(_check))
-
-
 # ── Ranking-specific count helpers ────────────────────────────────────────────
+# Ranking data format: one column per rank position (rawdata_columns[0] = Rank 1,
+# rawdata_columns[1] = Rank 2, …). Each cell holds the integer choice code for
+# that rank, or NaN when the respondent did not rank to that depth.
 
-def _code_count_rank_any(sub: pd.DataFrame, col: str, code: str) -> int:
-    """Count rows where *code* appears at ANY rank position (identical to MA logic)."""
-    return _code_count_mc(sub, col, code)
+def _base_count_rank_at(sub: pd.DataFrame, rank_cols: list[str], n: int) -> int:
+    """Count rows where the respondent gave at least *n* rank positions (col n-1 is non-NaN)."""
+    if n < 1 or n > len(rank_cols):
+        return 0
+    col = rank_cols[n - 1]
+    if col not in sub.columns:
+        return 0
+    return int(sub[col].notna().sum())
 
 
-def _base_count_rank_at(sub: pd.DataFrame, col: str, n: int) -> int:
-    """Count rows where the respondent gave at least *n* rank positions."""
-    def _check(v) -> bool:
-        if pd.isna(v) or str(v).strip() == "":
-            return False
-        return len(str(v).split(";")) >= n
-    return _safe_sum(sub[col].apply(_check))
-
-
-def _code_count_rank_at(sub: pd.DataFrame, col: str, code: str, position: int) -> int:
+def _code_count_rank_at(sub: pd.DataFrame, rank_cols: list[str], code: str, position: int) -> int:
     """Count rows where the choice at rank *position* (1-based) equals *code*."""
-    idx = position - 1
+    if position < 1 or position > len(rank_cols):
+        return 0
+    col = rank_cols[position - 1]
+    if col not in sub.columns:
+        return 0
+    return int((pd.to_numeric(sub[col], errors="coerce") == int(code)).sum())
 
-    def _check(v) -> bool:
-        if pd.isna(v) or str(v).strip() == "":
-            return False
-        parts = str(v).split(";")
-        if idx >= len(parts):
-            return False
-        try:
-            return str(int(float(parts[idx].strip()))) == code
-        except (ValueError, TypeError):
-            return False
 
-    return _safe_sum(sub[col].apply(_check))
+def _base_count_rank_any(sub: pd.DataFrame, rank_cols: list[str]) -> int:
+    """Count rows where the respondent ranked at least one choice (any rank column non-NaN)."""
+    cols = [c for c in rank_cols if c in sub.columns]
+    if not cols:
+        return 0
+    return int(sub[cols].notna().any(axis=1).sum())
+
+
+def _code_count_rank_any(sub: pd.DataFrame, rank_cols: list[str], code: str) -> int:
+    """Count rows where *code* appears at ANY rank position."""
+    cols = [c for c in rank_cols if c in sub.columns]
+    if not cols:
+        return 0
+    v = int(code)
+    return int(
+        (pd.concat(
+            [pd.to_numeric(sub[c], errors="coerce") for c in cols],
+            axis=1,
+        ) == v).any(axis=1).sum()
+    )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -398,8 +466,10 @@ def _compute_row_group(
             if sub_meta is None:
                 continue
 
-            sub_col = sub_meta.get("label", "")
-            if sub_col not in df.columns:
+            sub_col = _sub_q_col(sub_meta, "")
+            sub_raw_cols = sub_meta.get("rawdata_columns", [])
+            is_sub_ma = sub_atype == "MA"
+            if not is_sub_ma and (not sub_col or sub_col not in df.columns):
                 continue
 
             item_label = (
@@ -411,7 +481,8 @@ def _compute_row_group(
             req_stats = item.get("stats", ["base", "percent"])
 
             sub_bases: dict[int, int] = {
-                i: _base_count(df[bc.mask], sub_col)
+                i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
+                    else _base_count(df[bc.mask], sub_col))
                 for i, bc in enumerate(banner_cols)
             }
 
@@ -432,8 +503,7 @@ def _compute_row_group(
                         for i, bc in enumerate(banner_cols):
                             sub  = df[bc.mask]
                             base = sub_bases[i]
-                            cnt  = (_code_count_mc(sub, sub_col, code)
-                                    if sub_atype == "MA"
+                            cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
                                     else _code_count_sc(sub, sub_col, code))
                             cnts[i] = cnt
                             pcts[i] = cnt / base if base else 0.0
@@ -504,10 +574,12 @@ def compute_table(
         sub_ref = _parse_sub_q_ref(q, q_pos_to_meta or {})
         if sub_ref is not None:
             # Treat the sub-question as a flat SA/MA question
-            sub_col   = sub_ref.get("label", q)
-            sub_atype = sub_ref.get("answer_type", "SA")
-            col_choices = sub_ref.get("choices_i18n", {})
-            req_stats = sc.get("stats", ["base", "percent"])
+            sub_col      = _sub_q_col(sub_ref, q)
+            sub_atype    = sub_ref.get("answer_type", "SA")
+            sub_raw_cols = sub_ref.get("rawdata_columns", [])
+            is_sub_ma    = sub_atype == "MA"
+            col_choices  = sub_ref.get("choices_i18n", {})
+            req_stats    = sc.get("stats", ["base", "percent"])
 
             # Label: datatable config > parent question_i18n + row_label
             parent_label_q = _SUB_Q_RE.match(q).group(1)  # type: ignore[union-attr]
@@ -520,11 +592,12 @@ def compute_table(
             )
             q_label = sc.get("label") or default_label
 
-            if sub_col not in df.columns:
+            if not is_sub_ma and sub_col not in df.columns:
                 continue
 
             sub_bases: dict[int, int] = {
-                i: _base_count(df[bc.mask], sub_col)
+                i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
+                    else _base_count(df[bc.mask], sub_col))
                 for i, bc in enumerate(banner_cols)
             }
             sub_rows: list[StubRow] = []
@@ -544,8 +617,7 @@ def compute_table(
                         for i, bc in enumerate(banner_cols):
                             sub  = df[bc.mask]
                             base = sub_bases[i]
-                            cnt  = (_code_count_mc(sub, sub_col, code)
-                                    if sub_atype == "MA"
+                            cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
                                     else _code_count_sc(sub, sub_col, code))
                             cnts[i] = cnt
                             pcts[i] = cnt / base if base else 0.0
@@ -598,18 +670,37 @@ def compute_table(
             sub_atype   = "MA" if atype == "Matrix_MA" else "SA"
             col_choices = choices_i18n.get("columns", {}) if isinstance(choices_i18n, dict) else {}
 
+            # Build row_index → actual df column (supports new format rawdata_columns)
+            row_col_map = _build_row_col_map(q_meta)
+
+            def _paired_col(rc: str) -> str:
+                """Resolve actual df column for a single matrix row code."""
+                return row_col_map.get(rc) or f"{q_col}_r{rc}"
+
+            def _paired_base(sub_df, rc: str) -> int:
+                sm = next((s for s in q_meta.get("sub_questions", {}).values()
+                           if str(s.get("row_index", "")) == rc), None)
+                if sub_atype == "MA" and sm:
+                    return _base_count_ma(sub_df, sm.get("rawdata_columns", []))
+                col = _paired_col(rc)
+                return _base_count(sub_df, col) if col in sub_df.columns else 0
+
+            def _paired_cnt(sub_df, rc: str, code: str) -> int:
+                sm = next((s for s in q_meta.get("sub_questions", {}).values()
+                           if str(s.get("row_index", "")) == rc), None)
+                if sub_atype == "MA" and sm:
+                    return _code_count_ma(sub_df, sm.get("rawdata_columns", []), code)
+                col = _paired_col(rc)
+                return _code_count_sc(sub_df, col, code) if col in sub_df.columns else 0
+
             paired_bases: dict[int, int] = {}
             for i, bc in enumerate(banner_cols):
+                sub_df = df[bc.mask]
                 if bc.matrix_row_code is not None:
-                    matched = f"{q_col}_r{bc.matrix_row_code}"
-                    paired_bases[i] = _base_count(df[bc.mask], matched) if matched in df.columns else 0
+                    paired_bases[i] = _paired_base(sub_df, bc.matrix_row_code)
                 elif bc.matrix_row_codes is not None:
-                    # stacked: sum base counts across all grouped row columns
-                    paired_bases[i] = sum(
-                        _base_count(df[bc.mask], f"{q_col}_r{rc}")
-                        for rc in bc.matrix_row_codes
-                        if f"{q_col}_r{rc}" in df.columns
-                    )
+                    paired_bases[i] = sum(_paired_base(sub_df, rc)
+                                          for rc in bc.matrix_row_codes)
                 else:
                     paired_bases[i] = 0
 
@@ -628,25 +719,13 @@ def compute_table(
                         cnts: dict[int, int]   = {}
                         pcts: dict[int, float] = {}
                         for i, bc in enumerate(banner_cols):
-                            base = paired_bases[i]
+                            base   = paired_bases[i]
+                            sub_df = df[bc.mask]
                             if bc.matrix_row_code is not None:
-                                matched = f"{q_col}_r{bc.matrix_row_code}"
-                                if matched not in df.columns:
-                                    cnts[i] = 0; pcts[i] = 0.0; continue
-                                sub = df[bc.mask]
-                                cnt = (_code_count_mc(sub, matched, code)
-                                       if sub_atype == "MA"
-                                       else _code_count_sc(sub, matched, code))
+                                cnt = _paired_cnt(sub_df, bc.matrix_row_code, code)
                             elif bc.matrix_row_codes is not None:
-                                # stacked: aggregate counts across all grouped row columns
-                                sub = df[bc.mask]
-                                cnt = sum(
-                                    (_code_count_mc(sub, f"{q_col}_r{rc}", code)
-                                     if sub_atype == "MA"
-                                     else _code_count_sc(sub, f"{q_col}_r{rc}", code))
-                                    for rc in bc.matrix_row_codes
-                                    if f"{q_col}_r{rc}" in df.columns
-                                )
+                                cnt = sum(_paired_cnt(sub_df, rc, code)
+                                          for rc in bc.matrix_row_codes)
                             else:
                                 cnt = 0
                             cnts[i] = cnt
@@ -669,12 +748,15 @@ def compute_table(
             sub_atype = "MA" if atype == "Matrix_MA" else "SA"
             col_choices = choices_i18n.get("columns", {}) if isinstance(choices_i18n, dict) else {}
             for sub_key, sub_meta in q_meta.get("sub_questions", {}).items():
-                sub_col   = sub_meta.get("label", sub_key)   # e.g. "Q9_1_r1"
-                row_label = sub_meta.get("row_label", sub_col)
-                if sub_col not in df.columns:
+                sub_col      = _sub_q_col(sub_meta, sub_key)
+                sub_raw_cols = sub_meta.get("rawdata_columns", [])
+                is_sub_ma    = sub_atype == "MA"
+                row_label    = sub_meta.get("row_label", sub_col)
+                if not is_sub_ma and sub_col not in df.columns:
                     continue
                 sub_bases: dict[int, int] = {
-                    i: _base_count(df[bc.mask], sub_col)
+                    i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
+                        else _base_count(df[bc.mask], sub_col))
                     for i, bc in enumerate(banner_cols)
                 }
                 sub_rows: list[StubRow] = []
@@ -694,7 +776,8 @@ def compute_table(
                             for i, bc in enumerate(banner_cols):
                                 sub  = df[bc.mask]
                                 base = sub_bases[i]
-                                cnt  = _code_count_mc(sub, sub_col, code) if sub_atype == "MA" else _code_count_sc(sub, sub_col, code)
+                                cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
+                                        else _code_count_sc(sub, sub_col, code))
                                 cnts[i] = cnt
                                 pcts[i] = cnt / base if base else 0.0
                             sub_rows.append(StubRow(
@@ -712,18 +795,25 @@ def compute_table(
 
         # ── Ranking question ──────────────────────────────────────────────────
         if atype == "ranking":
-            if q_col not in df.columns:
+            # Each rank position is a separate column in rawdata_columns:
+            #   rawdata_columns[0] = Rank 1 col, [1] = Rank 2 col, …
+            rank_cols = q_meta.get("rawdata_columns", [])
+            if not rank_cols or rank_cols[0] not in df.columns:
                 continue
 
             mode     = sc.get("ranking_mode", "rank_dist")
             top_n    = sc.get("ranking_top_n", 0)
             sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
-            max_pos  = top_n if top_n > 0 else len(sorted_codes)
+            # max_pos capped at actual number of rank columns available
+            max_pos = min(
+                top_n if top_n > 0 else len(rank_cols),
+                len(rank_cols),
+            )
 
             if mode == "any_rank":
                 # ── MA-style: each choice → % ranked at any position ──────
                 any_bases: dict[int, int] = {
-                    i: _base_count(df[bc.mask], q_col)
+                    i: _base_count_rank_any(df[bc.mask], rank_cols)
                     for i, bc in enumerate(banner_cols)
                 }
                 any_rows: list[StubRow] = []
@@ -743,11 +833,12 @@ def compute_table(
                             for i, bc in enumerate(banner_cols):
                                 sub  = df[bc.mask]
                                 base = any_bases[i]
-                                cnt  = _code_count_rank_any(sub, q_col, code)
+                                cnt  = _code_count_rank_any(sub, rank_cols, code)
                                 cnts[i] = cnt
                                 pcts[i] = cnt / base if base else 0.0
+                            # sig: treat Rank_1 col as representative for the test
                             sig = _compute_sig_marks(
-                                q_col, code, "ranking", df, banner_cols, sig_config
+                                rank_cols[0], code, "SA", df, banner_cols, sig_config
                             )
                             any_rows.append(StubRow(
                                 label=_choice_label(choices_i18n, code), row_type="percent",
@@ -768,7 +859,7 @@ def compute_table(
                 rank_sub_blocks: list[StubBlock] = []
                 for n in range(1, max_pos + 1):
                     rank_bases: dict[int, int] = {
-                        i: _base_count_rank_at(df[bc.mask], q_col, n)
+                        i: _base_count_rank_at(df[bc.mask], rank_cols, n)
                         for i, bc in enumerate(banner_cols)
                     }
                     rank_rows: list[StubRow] = []
@@ -788,11 +879,11 @@ def compute_table(
                                 for i, bc in enumerate(banner_cols):
                                     sub  = df[bc.mask]
                                     base = rank_bases[i]
-                                    cnt  = _code_count_rank_at(sub, q_col, code, n)
+                                    cnt  = _code_count_rank_at(sub, rank_cols, code, n)
                                     cnts[i] = cnt
                                     pcts[i] = cnt / base if base else 0.0
                                 sig = _compute_sig_marks(
-                                    q_col, code, "ranking", df, banner_cols, sig_config
+                                    rank_cols[n - 1], code, "SA", df, banner_cols, sig_config
                                 )
                                 rank_rows.append(StubRow(
                                     label=_choice_label(choices_i18n, code), row_type="percent",
@@ -813,14 +904,34 @@ def compute_table(
                     ))
             continue
 
-        if q_col not in df.columns:
+        # MA questions are always stored as binary columns (e.g. S12_1, S12_2 …).
+        ma_raw_cols = q_meta.get("rawdata_columns", []) if atype == "MA" else []
+        is_ma       = atype == "MA"
+
+        if not is_ma and q_col not in df.columns:
             continue
 
         # base counts keyed by column index
         bases: dict[int, int] = {
-            i: _base_count(df[bc.mask], q_col)
+            i: (_base_count_ma(df[bc.mask], ma_raw_cols) if is_ma
+                else _base_count(df[bc.mask], q_col))
             for i, bc in enumerate(banner_cols)
         }
+
+        def _cnt_for_code(sub_df, code: str) -> int:
+            """Per-code count, routing to binary-MA or SA helper."""
+            if is_ma:
+                return _code_count_ma(sub_df, ma_raw_cols, code)
+            return _code_count_sc(sub_df, q_col, code)
+
+        def _sig_for_code(code: str) -> dict:
+            """Sig marks for a code, routing to the correct column."""
+            if is_ma:
+                bin_col = _ma_col_map(ma_raw_cols).get(code)
+                if bin_col:
+                    return _compute_sig_marks(bin_col, "1", "SA", df, banner_cols, sig_config)
+                return {}
+            return _compute_sig_marks(q_col, code, atype, df, banner_cols, sig_config)
 
         rows: list[StubRow] = []
 
@@ -852,13 +963,7 @@ def compute_table(
                     for _i, _bc in enumerate(banner_cols):
                         _sub  = df[_bc.mask]
                         _base = bases[_i]
-                        if atype == "MA":
-                            _cnt = int(_sub[q_col].apply(
-                                lambda v: any(c in str(v).split(";") for c in target)
-                                if pd.notna(v) and str(v).strip() != "" else False
-                            ).sum())
-                        else:
-                            _cnt = int(_sub[q_col].isin([int(c) for c in target]).sum())
+                        _cnt  = sum(_cnt_for_code(_sub, c) for c in target)
                         _cnts[_i] = _cnt
                         _pcts[_i] = _cnt / _base if _base else 0.0
                     return _cnts, _pcts
@@ -886,13 +991,10 @@ def compute_table(
                             for i, bc in enumerate(banner_cols):
                                 sub  = df[bc.mask]
                                 base = bases[i]
-                                cnt  = _code_count_mc(sub, q_col, code) if atype == "MA" \
-                                       else _code_count_sc(sub, q_col, code)
+                                cnt  = _cnt_for_code(sub, code)
                                 cnts[i] = cnt
                                 pcts[i] = cnt / base if base else 0.0
-                            sig = _compute_sig_marks(
-                                q_col, code, atype, df, banner_cols, sig_config
-                            )
+                            sig = _sig_for_code(code)
                             rows.append(StubRow(
                                 label=_choice_label(choices_i18n, code), row_type="percent",
                                 counts=cnts, values=pcts, sig_marks=sig, code=code,
@@ -907,11 +1009,10 @@ def compute_table(
                     for i, bc in enumerate(banner_cols):
                         sub  = df[bc.mask]
                         base = bases[i]
-                        cnt  = _code_count_mc(sub, q_col, code) if atype == "MA" \
-                               else _code_count_sc(sub, q_col, code)
+                        cnt  = _cnt_for_code(sub, code)
                         cnts[i] = cnt
                         pcts[i] = cnt / base if base else 0.0
-                    sig = _compute_sig_marks(q_col, code, atype, df, banner_cols, sig_config)
+                    sig = _sig_for_code(code)
                     rows.append(StubRow(
                         label=_choice_label(choices_i18n, code), row_type="percent",
                         counts=cnts, values=pcts, sig_marks=sig, code=code,
@@ -932,10 +1033,7 @@ def compute_table(
                 for i, bc in enumerate(banner_cols):
                     sub  = df[bc.mask]
                     base = bases[i]
-                    if atype == "MA":
-                        cnt = sum(_code_count_mc(sub, q_col, c) for c in target)
-                    else:
-                        cnt = int(sub[q_col].isin([int(c) for c in target]).sum())
+                    cnt  = sum(_cnt_for_code(sub, c) for c in target)
                     cnts[i] = cnt
                     pcts[i] = cnt / base if base else 0.0
                 rows.append(StubRow(

@@ -80,58 +80,78 @@ class FetchStep(Step):
     # ── rows mode ─────────────────────────────────────────────────────────────
 
     def _fetch_rows(self, context: dict[str, Any]) -> dict[str, Any]:
-        client        = context["client"]
-        survey_id     = context["survey_id"]
-        mcp_dir       = Path(context["mcp_dir"])
-        date_from     = context.get("date_from", "2020-01-01")
-        date_to       = context.get("date_to",   "2030-12-31")
-        limit         = int(context.get("rows_limit", 200))
+        client         = context["client"]
+        survey_id      = context["survey_id"]
+        mcp_dir        = Path(context["mcp_dir"])
+        date_from      = context.get("date_from", "2020-01-01")
+        date_to        = context.get("date_to",   "2030-12-31")
+        limit          = int(context.get("rows_limit", 200))
         profile_status = context.get("profile_status", ["approved"])
 
         mcp_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Definition
-        logger.info("[fetch-rows] Fetching definition …")
-        definition = client.get_survey_definition(survey_id)
-        (mcp_dir / "definition.json").write_text(
-            json.dumps(definition, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        logger.info("  → definition.json saved")
-
-        # 2. Row pages
-        logger.info("[fetch-rows] Fetching rows …")
-        page, offset = 1, 0
-        rows_pages: list[dict] = []
-        MAX_PAGES = 500
-        while page <= MAX_PAGES:
-            rows_data = client.get_survey_rows(
+        # Single-session path: definition + all row pages in one MCP session.
+        # Falls back to per-call path for duck-typed test clients.
+        if hasattr(client, "fetch_rows"):
+            logger.info("[fetch-rows] Single-session fetch (definition + all pages) …")
+            definition, rows_pages = client.fetch_rows(
                 survey_id,
                 date_from=date_from,
                 date_to=date_to,
-                offset=offset,
                 limit=limit,
-                format="code",
                 profile_status=profile_status,
             )
-            page_path = mcp_dir / f"rows_page_{page}.json"
-            page_path.write_text(
-                json.dumps(rows_data, ensure_ascii=False, indent=2), encoding="utf-8"
+            (mcp_dir / "definition.json").write_text(
+                json.dumps(definition, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            rows_pages.append(rows_data)
-            count = len(rows_data.get("rows", []))
-            logger.info("  → page %d: %d rows", page, count)
-
-            if not rows_data.get("pagination", {}).get("has_more"):
-                break
-            if count == 0:
-                logger.warning("[fetch-rows] has_more=True but 0 rows returned — stopping to prevent infinite loop")
-                break
-            offset += count
-            page   += 1
+            logger.info("  → definition.json saved")
+            for idx, rows_data in enumerate(rows_pages, start=1):
+                page_path = mcp_dir / f"rows_page_{idx}.json"
+                page_path.write_text(
+                    json.dumps(rows_data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                logger.info("  → rows_page_%d.json saved (%d rows)",
+                            idx, len(rows_data.get("rows", [])))
+            logger.info("  Done → %s (%d pages)", mcp_dir, len(rows_pages))
         else:
-            logger.warning("[fetch-rows] Reached MAX_PAGES=%d — stopped early", MAX_PAGES)
+            # Legacy: one MCP session per call (N+1 session.initialize() calls).
+            logger.info("[fetch-rows] Fetching definition …")
+            definition = client.get_survey_definition(survey_id)
+            (mcp_dir / "definition.json").write_text(
+                json.dumps(definition, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            logger.info("  → definition.json saved")
 
-        logger.info("  Done → %s (%d pages)", mcp_dir, page)
+            logger.info("[fetch-rows] Fetching rows …")
+            page, offset = 1, 0
+            rows_pages: list[dict] = []
+            MAX_PAGES = 500
+            while page <= MAX_PAGES:
+                rows_data = client.get_survey_rows(
+                    survey_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    offset=offset,
+                    limit=limit,
+                    format="code",
+                    profile_status=profile_status,
+                )
+                (mcp_dir / f"rows_page_{page}.json").write_text(
+                    json.dumps(rows_data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                rows_pages.append(rows_data)
+                count = len(rows_data.get("rows", []))
+                logger.info("  → page %d: %d rows", page, count)
+                if not rows_data.get("pagination", {}).get("has_more"):
+                    break
+                if count == 0:
+                    logger.warning("[fetch-rows] has_more=True but 0 rows — stopping")
+                    break
+                offset += count
+                page   += 1
+            else:
+                logger.warning("[fetch-rows] Reached MAX_PAGES=%d — stopped early", MAX_PAGES)
+            logger.info("  Done → %s (%d pages)", mcp_dir, page)
 
         context["mcp_dir"]    = str(mcp_dir)
         context["definition"] = definition

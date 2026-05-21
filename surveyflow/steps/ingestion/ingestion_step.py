@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from surveyflow.core.base import Step
 from surveyflow.steps.ingestion.data_parser import (
     encode_records,
@@ -101,7 +103,7 @@ class IngestionStep(Step):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         logger.info("Saved → %s", metadata_path)
 
-        context["rawdata"]       = df
+        context["rawdata"]       = pd.read_csv(rawdata_path)
         context["metadata"]      = metadata
         context["rawdata_path"]  = str(rawdata_path)
         context["metadata_path"] = str(metadata_path)
@@ -152,7 +154,7 @@ class IngestionStep(Step):
         logger.info("Saved → %s", rawdata_path)
         logger.info("Saved → %s", metadata_path)
 
-        context["rawdata"]       = df
+        context["rawdata"]       = pd.read_csv(rawdata_path)
         context["metadata"]      = metadata
         context["rawdata_path"]  = str(rawdata_path)
         context["metadata_path"] = str(metadata_path)

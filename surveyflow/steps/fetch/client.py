@@ -80,6 +80,216 @@ class QMeClient:
                 return result.content[0].text
         return result
 
+    # ── single-session full fetch (definition + data) ────────────────────────
+
+    def fetch_export(
+        self,
+        survey_id: int,
+        force_refresh: bool = True,
+        chunk_limit: int = 500,
+    ) -> tuple[dict, str]:
+        """One session: ``get_survey_definition`` + prepare + poll + read chunks.
+
+        Returns ``(definition_dict, csv_text)``.
+        Eliminates the extra ``session.initialize()`` call that the legacy path
+        needs when fetching definition separately from the export workflow.
+        """
+        return asyncio.run(
+            self._fetch_export_async(survey_id, force_refresh, chunk_limit)
+        )
+
+    async def _fetch_export_async(
+        self,
+        survey_id: int,
+        force_refresh: bool = True,
+        chunk_limit: int = 500,
+        max_poll: int = 120,
+        max_sleep: int = 60,
+    ) -> tuple[dict, str]:
+        import asyncio as _aio
+        import csv as _csv
+        import io as _io
+        import logging as _log
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        _logger = _log.getLogger(__name__)
+        headers = {"Authorization": f"Bearer {self.token}"}
+
+        async with streamablehttp_client(self.url, headers=headers) as (r, w, _):
+            async with ClientSession(r, w) as session:
+                await session.initialize()
+
+                # ── 1. definition ─────────────────────────────────────────────
+                definition = await self._tool(
+                    session, "get_survey_definition", {"survey_id": survey_id}
+                )
+                _logger.info("[fetch_export] definition loaded")
+
+                # ── 2. trigger export job ─────────────────────────────────────
+                prep = await self._tool(session, "prepare_survey_data_file", {
+                    "survey_id": survey_id,
+                    "format": "code",
+                    "force_refresh": force_refresh,
+                })
+                job_id = prep.get("job_id")
+                if not job_id:
+                    raise RuntimeError(
+                        f"prepare_survey_data_file returned no job_id: {prep}"
+                    )
+                _logger.info("[fetch_export] job_id=%s  status=%s", job_id, prep.get("status"))
+
+                # ── 3. poll until ready ───────────────────────────────────────
+                for _ in range(max_poll):
+                    status_resp = await self._tool(
+                        session, "get_survey_data_file_status", {"job_id": job_id}
+                    )
+                    status = status_resp.get("status", "")
+                    _logger.info("[fetch_export] poll status=%s", status)
+                    if status == "ready":
+                        break
+                    if status == "error":
+                        raise RuntimeError(f"Export job failed: {status_resp}")
+                    wait = min(int(status_resp.get("retry_after_seconds", 5)), max_sleep)
+                    await _aio.sleep(wait)
+                else:
+                    raise RuntimeError(
+                        f"Export job did not complete after {max_poll} polls"
+                    )
+
+                # ── 4. read all chunks ────────────────────────────────────────
+                parts: list[str] = []
+                offset = 0
+                for chunk_num in range(1, 2001):
+                    chunk = await self._tool(session, "read_survey_data_file", {
+                        "job_id": job_id,
+                        "file":   "data",
+                        "offset": offset,
+                        "limit":  chunk_limit,
+                    })
+
+                    if isinstance(chunk, str):
+                        parts.append(chunk)
+                        break
+
+                    if isinstance(chunk, dict):
+                        csv_text = chunk.get("csv") or chunk.get("content") or ""
+                        rows_val = chunk.get("rows", [])
+                        if csv_text:
+                            parts.append(
+                                csv_text if csv_text.endswith("\n") else csv_text + "\n"
+                            )
+                        elif rows_val:
+                            if isinstance(rows_val[0], str):
+                                parts.append("\n".join(rows_val) + "\n")
+                            elif isinstance(rows_val[0], (list, dict)):
+                                buf = _io.StringIO()
+                                if isinstance(rows_val[0], dict):
+                                    writer = _csv.DictWriter(
+                                        buf, fieldnames=list(rows_val[0].keys())
+                                    )
+                                    if offset == 0:
+                                        writer.writeheader()
+                                    writer.writerows(rows_val)
+                                else:
+                                    writer = _csv.writer(buf)
+                                    writer.writerows(rows_val)
+                                parts.append(buf.getvalue())
+
+                        pagination     = chunk.get("pagination", {})
+                        rows_remaining = pagination.get("rows_remaining", 0)
+                        has_more       = pagination.get("has_more", False)
+                        next_offset    = pagination.get("next_offset", offset + chunk_limit)
+                        _logger.info(
+                            "[fetch_export] chunk %d: offset=%d  remaining=%d",
+                            chunk_num, offset, rows_remaining,
+                        )
+                        if not has_more:
+                            break
+                        offset = next_offset
+                    else:
+                        break
+
+        return definition, "".join(parts)
+
+    def fetch_rows(
+        self,
+        survey_id: int,
+        date_from: str = "2020-01-01",
+        date_to: str = "2030-12-31",
+        limit: int = 200,
+        profile_status: list | None = None,
+    ) -> tuple[dict, list[dict]]:
+        """One session: ``get_survey_definition`` + all ``get_survey_rows`` pages.
+
+        Returns ``(definition_dict, rows_pages)``.
+        Eliminates N extra ``session.initialize()`` calls (one per page) that
+        the legacy per-call path incurs.
+        """
+        return asyncio.run(
+            self._fetch_rows_async(survey_id, date_from, date_to, limit, profile_status)
+        )
+
+    async def _fetch_rows_async(
+        self,
+        survey_id: int,
+        date_from: str = "2020-01-01",
+        date_to: str = "2030-12-31",
+        limit: int = 200,
+        profile_status: list | None = None,
+        max_pages: int = 500,
+    ) -> tuple[dict, list[dict]]:
+        import logging as _log
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        _logger = _log.getLogger(__name__)
+        headers = {"Authorization": f"Bearer {self.token}"}
+        ps_args: dict = {}
+        if profile_status is not None:
+            ps_args["profile_status"] = profile_status
+
+        async with streamablehttp_client(self.url, headers=headers) as (r, w, _):
+            async with ClientSession(r, w) as session:
+                await session.initialize()
+
+                # ── 1. definition ─────────────────────────────────────────────
+                definition = await self._tool(
+                    session, "get_survey_definition", {"survey_id": survey_id}
+                )
+                _logger.info("[fetch_rows] definition loaded")
+
+                # ── 2. paginate rows ──────────────────────────────────────────
+                rows_pages: list[dict] = []
+                page, offset = 1, 0
+                while page <= max_pages:
+                    rows_data = await self._tool(session, "get_survey_rows", {
+                        "survey_id": survey_id,
+                        "date_from": date_from,
+                        "date_to":   date_to,
+                        "format":    "code",
+                        "offset":    offset,
+                        "limit":     limit,
+                        **ps_args,
+                    })
+                    rows_pages.append(rows_data)
+                    count = len(rows_data.get("rows", []))
+                    _logger.info("[fetch_rows] page %d: %d rows", page, count)
+
+                    if not rows_data.get("pagination", {}).get("has_more"):
+                        break
+                    if count == 0:
+                        _logger.warning(
+                            "[fetch_rows] has_more=True but 0 rows — stopping"
+                        )
+                        break
+                    offset += count
+                    page   += 1
+                else:
+                    _logger.warning("[fetch_rows] Reached max_pages=%d", max_pages)
+
+        return definition, rows_pages
+
     # ── single-session export (prepare + poll + read all chunks) ─────────────
 
     def export_csv(
@@ -158,7 +368,35 @@ class QMeClient:
                         f"Export job did not complete after {max_poll} polls"
                     )
 
-                # ── 3. read all chunks ────────────────────────────────────────
+                # ── 3a. try direct download (1 HTTP request, skip chunk loop) ──
+                _files = status_resp.get("files") or prep.get("files") or []
+                _data_url = next(
+                    (f.get("url") or f.get("download_url")
+                     for f in _files
+                     if isinstance(f, dict) and f.get("file") == "data"),
+                    None,
+                )
+                if _data_url:
+                    try:
+                        import httpx as _httpx
+                        _logger.info("[export_csv] direct download …")
+                        _r = _httpx.get(
+                            _data_url,
+                            headers={"Authorization": f"Bearer {self.token}"},
+                            timeout=120,
+                        )
+                        _r.raise_for_status()
+                        _logger.info(
+                            "[export_csv] direct download OK (%d bytes)", len(_r.content)
+                        )
+                        return _r.text
+                    except Exception as _exc:
+                        _logger.warning(
+                            "[export_csv] direct download failed (%s) — falling back to chunks",
+                            _exc,
+                        )
+
+                # ── 3b. read all chunks (fallback) ────────────────────────────
                 parts: list[str] = []
                 offset = 0
                 for chunk_num in range(1, 2001):

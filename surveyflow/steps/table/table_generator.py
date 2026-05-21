@@ -294,11 +294,36 @@ def _safe_sum(series: pd.Series) -> int:
 
 
 def _base_count(sub: pd.DataFrame, col: str) -> int:
-    return _safe_sum(sub[col].apply(lambda v: pd.notna(v) and str(v).strip() != ""))
+    s = sub[col]
+    if len(s) == 0:
+        return 0
+    return int((s.notna() & (s.astype(str).str.strip() != "")).sum())
 
 
 def _code_count_sc(sub: pd.DataFrame, col: str, code: str) -> int:
     return _safe_sum(pd.to_numeric(sub[col], errors="coerce") == int(code))
+
+
+def _code_counts_sc_batch(sub: pd.DataFrame, col: str, codes: list[str]) -> dict[str, int]:
+    """Count all SA codes in one value_counts pass (vs. one scan per code)."""
+    if col not in sub.columns:
+        return {c: 0 for c in codes}
+    vc = pd.to_numeric(sub[col], errors="coerce").value_counts()
+    return {code: int(vc.get(int(code), 0)) for code in codes}
+
+
+def _code_counts_ma_batch(sub: pd.DataFrame, rawdata_cols: list, codes: list[str]) -> dict[str, int]:
+    """Count all MA codes in one vectorized .sum() (vs. one column sum per code)."""
+    cm = _ma_col_map(rawdata_cols)
+    result = {code: 0 for code in codes}
+    pairs = [(code, cm[code]) for code in codes if code in cm and cm[code] in sub.columns]
+    if not pairs:
+        return result
+    sel_cols = [col for _, col in pairs]
+    col_sums = (sub[sel_cols].apply(pd.to_numeric, errors="coerce").fillna(0) == 1).sum()
+    for code, col in pairs:
+        result[code] = int(col_sums[col])
+    return result
 
 
 # ── Ranking-specific count helpers ────────────────────────────────────────────
@@ -442,6 +467,9 @@ def _compute_row_group(
     items      = group_cfg.get("items", [])
     shared_rows = _validate_row_group(items, q_pos_to_meta)
 
+    # Pre-slice once per banner column for this group.
+    sub_dfs: list[pd.DataFrame] = [df[bc.mask] for bc in banner_cols]
+    nb = len(banner_cols)
     result: list[RowGroupBlock] = []
 
     for row_code, row_label_raw in shared_rows.items():
@@ -481,9 +509,9 @@ def _compute_row_group(
             req_stats = item.get("stats", ["base", "percent"])
 
             sub_bases: dict[int, int] = {
-                i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
-                    else _base_count(df[bc.mask], sub_col))
-                for i, bc in enumerate(banner_cols)
+                i: (_base_count_ma(sub_dfs[i], sub_raw_cols) if is_sub_ma
+                    else _base_count(sub_dfs[i], sub_col))
+                for i in range(nb)
             }
 
             sub_rows: list[StubRow] = []
@@ -497,16 +525,14 @@ def _compute_row_group(
                         values={i: float(v) for i, v in sub_bases.items()},
                     ))
                 elif stat == "percent" and col_choices:
-                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
-                        cnts: dict[int, int]   = {}
-                        pcts: dict[int, float] = {}
-                        for i, bc in enumerate(banner_cols):
-                            sub  = df[bc.mask]
-                            base = sub_bases[i]
-                            cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
-                                    else _code_count_sc(sub, sub_col, code))
-                            cnts[i] = cnt
-                            pcts[i] = cnt / base if base else 0.0
+                    _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
+                    if is_sub_ma:
+                        _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(nb)]
+                    else:
+                        _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(nb)]
+                    for code in _scodes:
+                        cnts: dict[int, int]   = {i: _batch[i][code] for i in range(nb)}
+                        pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(nb)}
                         sub_rows.append(StubRow(
                             label=_choice_label(col_choices, code), row_type="percent",
                             counts=cnts, values=pcts, code=code,
@@ -557,6 +583,8 @@ def compute_table(
 
     blocks: list[StubBlock | RowGroupBlock | RankingBlock] = []
     n = len(banner_cols)
+    # Pre-slice once — reused for every question and every stat below.
+    sub_dfs: list[pd.DataFrame] = [df[bc.mask] for bc in banner_cols]
 
     for sc in stub_configs:
 
@@ -596,9 +624,9 @@ def compute_table(
                 continue
 
             sub_bases: dict[int, int] = {
-                i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
-                    else _base_count(df[bc.mask], sub_col))
-                for i, bc in enumerate(banner_cols)
+                i: (_base_count_ma(sub_dfs[i], sub_raw_cols) if is_sub_ma
+                    else _base_count(sub_dfs[i], sub_col))
+                for i in range(n)
             }
             sub_rows: list[StubRow] = []
             for stat in DEFAULT_STATS_ORDER:
@@ -611,16 +639,14 @@ def compute_table(
                         values={i: float(v) for i, v in sub_bases.items()},
                     ))
                 elif stat == "percent" and col_choices:
-                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
-                        cnts: dict[int, int]   = {}
-                        pcts: dict[int, float] = {}
-                        for i, bc in enumerate(banner_cols):
-                            sub  = df[bc.mask]
-                            base = sub_bases[i]
-                            cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
-                                    else _code_count_sc(sub, sub_col, code))
-                            cnts[i] = cnt
-                            pcts[i] = cnt / base if base else 0.0
+                    _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
+                    if is_sub_ma:
+                        _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
+                    else:
+                        _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
+                    for code in _scodes:
+                        cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
+                        pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
                         sub_rows.append(StubRow(
                             label=_choice_label(col_choices, code), row_type="percent",
                             counts=cnts, values=pcts, code=code,
@@ -695,11 +721,10 @@ def compute_table(
 
             paired_bases: dict[int, int] = {}
             for i, bc in enumerate(banner_cols):
-                sub_df = df[bc.mask]
                 if bc.matrix_row_code is not None:
-                    paired_bases[i] = _paired_base(sub_df, bc.matrix_row_code)
+                    paired_bases[i] = _paired_base(sub_dfs[i], bc.matrix_row_code)
                 elif bc.matrix_row_codes is not None:
-                    paired_bases[i] = sum(_paired_base(sub_df, rc)
+                    paired_bases[i] = sum(_paired_base(sub_dfs[i], rc)
                                           for rc in bc.matrix_row_codes)
                 else:
                     paired_bases[i] = 0
@@ -719,12 +744,11 @@ def compute_table(
                         cnts: dict[int, int]   = {}
                         pcts: dict[int, float] = {}
                         for i, bc in enumerate(banner_cols):
-                            base   = paired_bases[i]
-                            sub_df = df[bc.mask]
+                            base = paired_bases[i]
                             if bc.matrix_row_code is not None:
-                                cnt = _paired_cnt(sub_df, bc.matrix_row_code, code)
+                                cnt = _paired_cnt(sub_dfs[i], bc.matrix_row_code, code)
                             elif bc.matrix_row_codes is not None:
-                                cnt = sum(_paired_cnt(sub_df, rc, code)
+                                cnt = sum(_paired_cnt(sub_dfs[i], rc, code)
                                           for rc in bc.matrix_row_codes)
                             else:
                                 cnt = 0
@@ -755,9 +779,9 @@ def compute_table(
                 if not is_sub_ma and sub_col not in df.columns:
                     continue
                 sub_bases: dict[int, int] = {
-                    i: (_base_count_ma(df[bc.mask], sub_raw_cols) if is_sub_ma
-                        else _base_count(df[bc.mask], sub_col))
-                    for i, bc in enumerate(banner_cols)
+                    i: (_base_count_ma(sub_dfs[i], sub_raw_cols) if is_sub_ma
+                        else _base_count(sub_dfs[i], sub_col))
+                    for i in range(n)
                 }
                 sub_rows: list[StubRow] = []
                 for stat in DEFAULT_STATS_ORDER:
@@ -770,16 +794,14 @@ def compute_table(
                             values={i: float(v) for i, v in sub_bases.items()},
                         ))
                     elif stat == "percent" and col_choices:
-                        for code in sorted(col_choices.keys(), key=lambda x: int(x)):
-                            cnts: dict[int, int]   = {}
-                            pcts: dict[int, float] = {}
-                            for i, bc in enumerate(banner_cols):
-                                sub  = df[bc.mask]
-                                base = sub_bases[i]
-                                cnt  = (_code_count_ma(sub, sub_raw_cols, code) if is_sub_ma
-                                        else _code_count_sc(sub, sub_col, code))
-                                cnts[i] = cnt
-                                pcts[i] = cnt / base if base else 0.0
+                        _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
+                        if is_sub_ma:
+                            _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
+                        else:
+                            _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
+                        for code in _scodes:
+                            cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
+                            pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
                             sub_rows.append(StubRow(
                                 label=_choice_label(col_choices, code), row_type="percent",
                                 counts=cnts, values=pcts, code=code,
@@ -813,8 +835,8 @@ def compute_table(
             if mode == "any_rank":
                 # ── MA-style: each choice → % ranked at any position ──────
                 any_bases: dict[int, int] = {
-                    i: _base_count_rank_any(df[bc.mask], rank_cols)
-                    for i, bc in enumerate(banner_cols)
+                    i: _base_count_rank_any(sub_dfs[i], rank_cols)
+                    for i in range(n)
                 }
                 any_rows: list[StubRow] = []
                 for stat in DEFAULT_STATS_ORDER:
@@ -830,10 +852,9 @@ def compute_table(
                         for code in sorted_codes:
                             cnts: dict[int, int]   = {}
                             pcts: dict[int, float] = {}
-                            for i, bc in enumerate(banner_cols):
-                                sub  = df[bc.mask]
+                            for i in range(n):
                                 base = any_bases[i]
-                                cnt  = _code_count_rank_any(sub, rank_cols, code)
+                                cnt  = _code_count_rank_any(sub_dfs[i], rank_cols, code)
                                 cnts[i] = cnt
                                 pcts[i] = cnt / base if base else 0.0
                             # sig: treat Rank_1 col as representative for the test
@@ -857,10 +878,10 @@ def compute_table(
             else:
                 # ── rank_dist: one StubBlock per rank position ────────────
                 rank_sub_blocks: list[StubBlock] = []
-                for n in range(1, max_pos + 1):
+                for rank_pos in range(1, max_pos + 1):
                     rank_bases: dict[int, int] = {
-                        i: _base_count_rank_at(df[bc.mask], rank_cols, n)
-                        for i, bc in enumerate(banner_cols)
+                        i: _base_count_rank_at(sub_dfs[i], rank_cols, rank_pos)
+                        for i in range(n)
                     }
                     rank_rows: list[StubRow] = []
                     for stat in DEFAULT_STATS_ORDER:
@@ -876,14 +897,13 @@ def compute_table(
                             for code in sorted_codes:
                                 cnts = {}
                                 pcts = {}
-                                for i, bc in enumerate(banner_cols):
-                                    sub  = df[bc.mask]
+                                for i in range(n):
                                     base = rank_bases[i]
-                                    cnt  = _code_count_rank_at(sub, rank_cols, code, n)
+                                    cnt  = _code_count_rank_at(sub_dfs[i], rank_cols, code, rank_pos)
                                     cnts[i] = cnt
                                     pcts[i] = cnt / base if base else 0.0
                                 sig = _compute_sig_marks(
-                                    rank_cols[n - 1], code, "SA", df, banner_cols, sig_config
+                                    rank_cols[rank_pos - 1], code, "SA", df, banner_cols, sig_config
                                 )
                                 rank_rows.append(StubRow(
                                     label=_choice_label(choices_i18n, code), row_type="percent",
@@ -891,8 +911,8 @@ def compute_table(
                                 ))
                     if rank_rows:
                         rank_sub_blocks.append(StubBlock(
-                            question_code=f"RANK{n}",
-                            question_label=f"Rank {n}",
+                            question_code=f"RANK{rank_pos}",
+                            question_label=f"Rank {rank_pos}",
                             answer_type="ranking",
                             rows=rank_rows,
                         ))
@@ -913,16 +933,10 @@ def compute_table(
 
         # base counts keyed by column index
         bases: dict[int, int] = {
-            i: (_base_count_ma(df[bc.mask], ma_raw_cols) if is_ma
-                else _base_count(df[bc.mask], q_col))
-            for i, bc in enumerate(banner_cols)
+            i: (_base_count_ma(sub_dfs[i], ma_raw_cols) if is_ma
+                else _base_count(sub_dfs[i], q_col))
+            for i in range(n)
         }
-
-        def _cnt_for_code(sub_df, code: str) -> int:
-            """Per-code count, routing to binary-MA or SA helper."""
-            if is_ma:
-                return _code_count_ma(sub_df, ma_raw_cols, code)
-            return _code_count_sc(sub_df, q_col, code)
 
         def _sig_for_code(code: str) -> dict:
             """Sig marks for a code, routing to the correct column."""
@@ -950,20 +964,27 @@ def compute_table(
                 if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
 
-                stub_groups  = sc.get("groups", [])
+                stub_groups   = sc.get("groups", [])
                 grouped_codes: set[str] = {
                     str(c) for grp in stub_groups for c in grp.get("codes", [])
                 }
                 sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
 
+                # Batch: one value_counts (SA) or one .sum() (MA) per banner col.
+                if is_ma:
+                    _batch = [_code_counts_ma_batch(sub_dfs[i], ma_raw_cols, sorted_codes)
+                              for i in range(n)]
+                else:
+                    _batch = [_code_counts_sc_batch(sub_dfs[i], q_col, sorted_codes)
+                              for i in range(n)]
+
                 def _cnt_pct_union(target: list[str]) -> tuple[dict, dict]:
-                    """Count/pct for a union of codes (for group summary rows)."""
+                    """Count/pct for a union of codes (group summary rows)."""
                     _cnts: dict[int, int]   = {}
                     _pcts: dict[int, float] = {}
-                    for _i, _bc in enumerate(banner_cols):
-                        _sub  = df[_bc.mask]
+                    for _i in range(n):
                         _base = bases[_i]
-                        _cnt  = sum(_cnt_for_code(_sub, c) for c in target)
+                        _cnt  = sum(_batch[_i][c] for c in target)
                         _cnts[_i] = _cnt
                         _pcts[_i] = _cnt / _base if _base else 0.0
                     return _cnts, _pcts
@@ -986,14 +1007,9 @@ def compute_table(
 
                     if grp_type == "netted":
                         for code in grp_codes:
-                            cnts: dict[int, int]   = {}
-                            pcts: dict[int, float] = {}
-                            for i, bc in enumerate(banner_cols):
-                                sub  = df[bc.mask]
-                                base = bases[i]
-                                cnt  = _cnt_for_code(sub, code)
-                                cnts[i] = cnt
-                                pcts[i] = cnt / base if base else 0.0
+                            cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
+                            pcts: dict[int, float] = {i: cnts[i] / bases[i] if bases[i] else 0.0
+                                                      for i in range(n)}
                             sig = _sig_for_code(code)
                             rows.append(StubRow(
                                 label=_choice_label(choices_i18n, code), row_type="percent",
@@ -1004,14 +1020,8 @@ def compute_table(
                 for code in sorted_codes:
                     if code in grouped_codes:
                         continue
-                    cnts = {}
-                    pcts = {}
-                    for i, bc in enumerate(banner_cols):
-                        sub  = df[bc.mask]
-                        base = bases[i]
-                        cnt  = _cnt_for_code(sub, code)
-                        cnts[i] = cnt
-                        pcts[i] = cnt / base if base else 0.0
+                    cnts = {i: _batch[i][code] for i in range(n)}
+                    pcts = {i: cnts[i] / bases[i] if bases[i] else 0.0 for i in range(n)}
                     sig = _sig_for_code(code)
                     rows.append(StubRow(
                         label=_choice_label(choices_i18n, code), row_type="percent",
@@ -1030,10 +1040,12 @@ def compute_table(
                     target = sorted_codes[-2:] if stat == "t2b" else sorted_codes[:2]
                 cnts: dict[int, int]   = {}
                 pcts: dict[int, float] = {}
-                for i, bc in enumerate(banner_cols):
-                    sub  = df[bc.mask]
+                for i in range(n):
                     base = bases[i]
-                    cnt  = sum(_cnt_for_code(sub, c) for c in target)
+                    if is_ma:
+                        cnt = sum(_code_count_ma(sub_dfs[i], ma_raw_cols, c) for c in target)
+                    else:
+                        cnt = sum(_code_count_sc(sub_dfs[i], q_col, c) for c in target)
                     cnts[i] = cnt
                     pcts[i] = cnt / base if base else 0.0
                 rows.append(StubRow(
@@ -1049,8 +1061,8 @@ def compute_table(
                 # mean_factor: {"1": 5, "2": 4, ...} maps code → numeric weight (SA only)
                 mean_factor: dict | None = sc.get("mean_factor") if atype == "SA" else None
                 stat_vals: dict[int, float] = {}
-                for i, bc in enumerate(banner_cols):
-                    raw = pd.to_numeric(df[bc.mask][q_col], errors="coerce").dropna()
+                for i in range(n):
+                    raw = pd.to_numeric(sub_dfs[i][q_col], errors="coerce").dropna()
                     if len(raw) == 0:
                         stat_vals[i] = 0.0
                         continue

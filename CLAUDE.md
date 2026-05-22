@@ -55,31 +55,40 @@ Note the `survey_id`.
 
 ### Step 2 — Fetch and save MCP data
 
-**First, check if `output/SURVEY_NAME/mcp/` already exists and contains `definition.json` + `rows_page_*.json`.**
+**First, check if `output/SURVEY_NAME/mcp/` already exists and contains `definition.json` + `data_export.csv`.**
 
 If files exist → ask user:
-> "Input data đã có sẵn (`definition.json`, `rows_page_1.json`, …). Bạn muốn dùng data cũ hay fetch lại data mới từ QMe?"
+> "Input data đã có sẵn (`definition.json`, `data_export.csv`). Bạn muốn dùng data cũ hay fetch lại data mới từ QMe?"
 
 - User says **dùng data cũ / no** → skip to Step 3
 - User says **fetch lại / yes** → proceed to fetch below
 
 If files do not exist → fetch immediately (no need to ask):
+
+**Step A — Definition:**
 ```
 get_survey_definition(survey_id)
   → save to output/SURVEY_NAME/mcp/definition.json
-
-get_survey_rows(survey_id, date_from="2020-01-01", date_to="2030-12-31", format="code", offset=0,   limit=200, profile_status=["approved"])
-  → save to output/SURVEY_NAME/mcp/rows_page_1.json
-
-get_survey_rows(survey_id, date_from="2020-01-01", date_to="2030-12-31", format="code", offset=200, limit=200, profile_status=["approved"])
-  → save to output/SURVEY_NAME/mcp/rows_page_2.json
-
-... keep fetching (offset += 200) until has_more = false in pagination
 ```
 
-> ⚠️ **`get_survey_rows` yêu cầu bắt buộc `date_from` và `date_to` (YYYY-MM-DD).**
-> Luôn dùng `date_from="2020-01-01"` và `date_to="2030-12-31"` để lấy toàn bộ data.
-> Không bao giờ dùng `prepare_survey_data_file` — luôn dùng `get_survey_definition` + `get_survey_rows`.
+**Step B — Export CSV (prepare → poll → read chunks):**
+```
+# 1. Trigger export job
+prepare_survey_data_file(survey_id, format="code", force_refresh=False)
+  → returns { job_id, status, expires_at, files[], ... }
+
+# 2. Poll until ready (nếu status chưa phải "ready")
+get_survey_data_file_status(job_id)
+  → lặp lại mỗi retry_after_seconds cho đến khi status == "ready"
+
+# 3. Read all chunks
+read_survey_data_file(job_id, file="data", offset=0,    limit=500)
+read_survey_data_file(job_id, file="data", offset=500,  limit=500)
+... keep reading (offset += 500) until pagination.has_more == false
+
+# 4. Assemble chunk text → save to output/SURVEY_NAME/mcp/data_export.csv
+#    Write with encoding="utf-8-sig" (BOM for Excel)
+```
 
 > ⚠️ **MCP trả về structuredContent (dict), không phải plain text.**
 > Dùng Write tool để ghi file — nội dung là `json.dumps(result, ensure_ascii=False, indent=2)`.
@@ -103,6 +112,7 @@ the pipeline automatically skips the table step and only generates `data/`:
 ```bash
 python run_pipeline.py \
   --mcp-dir    output/SURVEY_NAME/mcp \
+  --export-csv output/SURVEY_NAME/mcp/data_export.csv \
   --output-dir output/SURVEY_NAME
 ```
 
@@ -161,6 +171,7 @@ python run_pipeline.py \
 ```bash
 python run_pipeline.py \
   --mcp-dir         output/SURVEY_NAME/mcp \
+  --export-csv      output/SURVEY_NAME/mcp/data_export.csv \
   --output-dir      output/SURVEY_NAME \
   --version         vX \
   --force-ingestion
@@ -180,12 +191,13 @@ output_dir = BASE / "output" / "SURVEY_NAME"
 data_dir   = output_dir / "data"
 
 # Ingestion-only (no datatable_config → table step is skipped):
+from surveyflow.steps.ingestion.export_parser import parse_export_csv
 mcp_dir    = output_dir / "mcp"
 definition = json.load(open(mcp_dir / "definition.json", encoding="utf-8"))
-rows_pages = [json.load(open(p, encoding="utf-8")) for p in sorted(mcp_dir.glob("rows_page_*.json"))]
+export_df  = parse_export_csv(mcp_dir / "data_export.csv")
 result = Pipeline(PipelineConfig(
     definition   = definition,
-    rows_pages   = rows_pages,
+    export_df    = export_df,
     output_dir   = str(output_dir),
     data_dir     = str(data_dir),
 )).run()
@@ -381,8 +393,7 @@ Dùng `row_group: true` khi muốn nhóm nhiều câu matrix có chung `choices_
 output/SURVEY_NAME/
 ├── mcp/                      ← MCP raw files (fetched from QMe)
 │   ├── definition.json
-│   ├── rows_page_1.json
-│   └── rows_page_2.json
+│   └── data_export.csv       ← assembled from read_survey_data_file chunks
 ├── data/                     ← rawdata.csv + metadata.json (generated from mcp/, reused)
 │   ├── rawdata.csv
 │   └── metadata.json
@@ -413,7 +424,7 @@ output/SURVEY_NAME/
 | "brand làm header, tất cả brands" | Thêm `banner_matrix: { question: "QX" }` (không có groups) |
 | "brand header, Castrol và Shell riêng, nhóm International" | Thêm `banner_matrix` với `groups` mix `row_code`/`row_codes` |
 | "bảng bình thường + bảng matrix brand" | Tạo 2 items trong array: 1 không có banner_matrix, 1 có |
-| "refresh data / lấy data mới" | Re-fetch MCP rows → overwrite `mcp/rows_page_*.json` → re-run với `--force-ingestion` |
+| "refresh data / lấy data mới" | Re-fetch (prepare→poll→read) → overwrite `mcp/data_export.csv` → re-run với `--export-csv` + `--force-ingestion` |
 
 ---
 
@@ -426,24 +437,35 @@ Default: `approved` only.
 
 ## QMe MCP tool reference
 
-> Chỉ dùng 2 tools này để fetch data. Không dùng `prepare_survey_data_file`.
-
 ### get_survey_definition
 ```
 Required: survey_id (integer)
 ```
 
-### get_survey_rows
+### prepare_survey_data_file
 ```
-Required: survey_id (integer)
-          date_from  (string YYYY-MM-DD)  ← bắt buộc, dùng "2020-01-01"
-          date_to    (string YYYY-MM-DD)  ← bắt buộc, dùng "2030-12-31"
-Optional: offset          (integer, default 0)
-          limit           (integer, default 200, max 200)
-          format          (string "code" | "text", dùng "code" cho ingestion)
-          profile_status  (array, ví dụ ["approved"] hoặc ["approved","pending"])
+Required: survey_id     (integer)
+Optional: format        (string "code" | "text", dùng "code")
+          force_refresh (boolean, default false — dùng cache TTL)
 ```
-Pagination: lặp lại với `offset += 200` cho đến khi `result["pagination"]["has_more"] == false`.
+Returns: `{ job_id, status, expires_at, files[], ... }`
+
+### get_survey_data_file_status
+```
+Required: job_id (string)
+```
+Returns: `{ status ("pending"|"processing"|"ready"|"error"), retry_after_seconds, ... }`  
+Poll mỗi `retry_after_seconds` cho đến khi `status == "ready"`.
+
+### read_survey_data_file
+```
+Required: job_id  (string)
+Optional: file    (string "data" | "definition", default "data")
+          offset  (integer, default 0)
+          limit   (integer, default 500)
+```
+Returns: `{ rows/csv, pagination: { has_more, next_offset, rows_remaining } }`  
+Pagination: lặp lại với `offset += limit` cho đến khi `pagination.has_more == false`.
 
 ### search_surveys (dùng khi tìm survey_id)
 ```

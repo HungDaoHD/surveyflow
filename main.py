@@ -30,8 +30,11 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723334             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
-SURVEY_ID   = 723306             # int  — survey ID từ QMe
-SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
+# SURVEY_ID   = 723306             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
+
+SURVEY_ID   = 723394             # int  — survey ID từ QMe
+SURVEY_NAME = "VN8928 - Transino - BHC" # str  — tên thư mục output
 
 # Bật/tắt từng bước
 FETCH_MCP   = True  # True  = fetch lại data từ QMe (ghi đè mcp/)

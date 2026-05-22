@@ -295,7 +295,7 @@ class QMeClient:
     def export_csv(
         self,
         survey_id: int,
-        force_refresh: bool = True,
+        force_refresh: bool = False,
         chunk_limit: int = 500,
     ) -> str:
         """Prepare + poll + read all chunks in **one** MCP session.
@@ -318,7 +318,7 @@ class QMeClient:
     async def _export_csv_async(
         self,
         survey_id: int,
-        force_refresh: bool = True,
+        force_refresh: bool = False,
         chunk_limit: int = 500,
         max_poll: int = 120,
         max_sleep: int = 60,
@@ -373,7 +373,7 @@ class QMeClient:
                 _data_url = next(
                     (f.get("url") or f.get("download_url")
                      for f in _files
-                     if isinstance(f, dict) and f.get("file") == "data"),
+                     if isinstance(f, dict) and f.get("role") == "data"),
                     None,
                 )
                 if _data_url:

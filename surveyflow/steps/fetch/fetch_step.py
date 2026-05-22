@@ -164,7 +164,7 @@ class FetchStep(Step):
         client        = context["client"]
         survey_id     = context["survey_id"]
         mcp_dir       = Path(context["mcp_dir"])
-        force_refresh = context.get("force_refresh", True)
+        force_refresh = context.get("force_refresh", False)
         chunk_limit   = int(context.get("chunk_limit", 500))
 
         mcp_dir.mkdir(parents=True, exist_ok=True)

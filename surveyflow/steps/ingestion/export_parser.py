@@ -285,7 +285,9 @@ def convert_export_to_rawdata(
             return "approved"
         return "pending"
 
-    df["profile_status"] = df.apply(_status, axis=1)
+    # astype(object) ensures string dtype even when df has 0 rows —
+    # pandas.apply() on an empty DataFrame defaults to float64.
+    df["profile_status"] = df.apply(_status, axis=1).astype(object)
 
     # Load question labels from metadata.json
     meta_path = data_dir / "metadata.json"
@@ -298,9 +300,18 @@ def convert_export_to_rawdata(
             if lbl:
                 question_labels.append(lbl)
 
-    # Longest-label-wins: each export column → best matching question label
+    # System columns must never be matched as question columns.
+    # Define them first so the col_to_lbl loop can skip them explicitly.
+    SYSTEM_KEEP = ["task_id", "profile_status", "date_time", "Task duration"]
+    _system_set = set(SYSTEM_KEEP)
+
+    # Longest-label-wins: each export column → best matching question label.
+    # Skip system columns so a question label that is a prefix of e.g.
+    # "profile_status" (e.g. label="profile") cannot claim that column.
     col_to_lbl: dict[str, str] = {}
     for col in df.columns:
+        if col in _system_set:
+            continue
         best_lbl, best_len = "", -1
         for lbl in question_labels:
             if (col == lbl or col.startswith(lbl + "_")) and len(lbl) > best_len:
@@ -313,7 +324,6 @@ def convert_export_to_rawdata(
         if col_to_lbl.get(col) and col not in PERSONAL_COLS
     ]
 
-    SYSTEM_KEEP = ["task_id", "profile_status", "date_time", "Task duration"]
     system_cols = [c for c in SYSTEM_KEEP if c in df.columns]
 
     final_cols = system_cols + [c for c in question_cols if c not in system_cols]
@@ -324,17 +334,21 @@ def convert_export_to_rawdata(
     df = df[final_cols]
 
     # Binary-MA encoding (null→0 for answered rows; all-null stays NaN)
+    # _system_set guard is redundant with col_to_lbl fix above but kept as a
+    # belt-and-suspenders safety net so system columns can NEVER be encoded.
     for q in meta.get("questions", {}).values():
         lbl   = q.get("label", "")
         atype = q.get("answer_type", "")
         if atype == "MA":
             group = [c for c in df.columns
-                     if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)]
+                     if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)
+                     and c not in _system_set]
             if group:
                 _encode_ma_group(df, group)
         elif atype == "Matrix_MA":
             q_cols = [c for c in df.columns
-                      if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)]
+                      if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)
+                      and c not in _system_set]
             row_groups: dict[int, list] = {}
             for c in q_cols:
                 rn = row_num_from_col(c, lbl)
@@ -344,7 +358,8 @@ def convert_export_to_rawdata(
                 _encode_ma_group(df, row_cols)
         elif atype == "multiplenumber":
             group = [c for c in df.columns
-                     if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)]
+                     if col_to_lbl.get(c) == lbl and not is_other_col(c, lbl)
+                     and c not in _system_set]
             for col in group:
                 import pandas as _pd
                 df[col] = (

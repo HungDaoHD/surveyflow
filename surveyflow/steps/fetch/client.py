@@ -134,9 +134,8 @@ class QMeClient:
                 })
                 job_id = prep.get("job_id")
                 if not job_id:
-                    raise RuntimeError(
-                        f"prepare_survey_data_file returned no job_id: {prep}"
-                    )
+                    _logger.debug("[fetch_export] prepare response: %s", prep)
+                    raise RuntimeError("prepare_survey_data_file returned no job_id")
                 _logger.info("[fetch_export] job_id=%s  status=%s", job_id, prep.get("status"))
 
                 # ── 3. poll until ready ───────────────────────────────────────
@@ -149,7 +148,8 @@ class QMeClient:
                     if status == "ready":
                         break
                     if status == "error":
-                        raise RuntimeError(f"Export job failed: {status_resp}")
+                        _logger.debug("[fetch_export] job error response: %s", status_resp)
+                        raise RuntimeError("Export job failed with status=error")
                     wait = min(int(status_resp.get("retry_after_seconds", 5)), max_sleep)
                     await _aio.sleep(wait)
                 else:
@@ -345,9 +345,8 @@ class QMeClient:
                 })
                 job_id = prep.get("job_id")
                 if not job_id:
-                    raise RuntimeError(
-                        f"prepare_survey_data_file returned no job_id: {prep}"
-                    )
+                    _logger.debug("[export_csv] prepare response: %s", prep)
+                    raise RuntimeError("prepare_survey_data_file returned no job_id")
                 _logger.info("[export_csv] job_id=%s  status=%s", job_id, prep.get("status"))
 
                 # ── 2. poll until ready ───────────────────────────────────────
@@ -360,7 +359,8 @@ class QMeClient:
                     if status == "ready":
                         break
                     if status == "error":
-                        raise RuntimeError(f"Export job failed: {status_resp}")
+                        _logger.debug("[export_csv] job error response: %s", status_resp)
+                        raise RuntimeError("Export job failed with status=error")
                     wait = min(int(status_resp.get("retry_after_seconds", 5)), max_sleep)
                     await _aio.sleep(wait)
                 else:
@@ -377,6 +377,17 @@ class QMeClient:
                     None,
                 )
                 if _data_url:
+                    # SSRF guard: only allow downloads from the same host as the MCP endpoint
+                    from urllib.parse import urlparse as _urlparse
+                    _tp = _urlparse(self.url)
+                    _dp = _urlparse(_data_url)
+                    if _dp.scheme != "https" or _dp.hostname != _tp.hostname:
+                        _logger.warning(
+                            "[export_csv] untrusted download URL host=%s — skipping",
+                            _dp.hostname,
+                        )
+                        _data_url = None
+                if _data_url:
                     try:
                         import httpx as _httpx
                         _logger.info("[export_csv] direct download …")
@@ -391,10 +402,19 @@ class QMeClient:
                         )
                         return _r.text
                     except Exception as _exc:
-                        _logger.warning(
-                            "[export_csv] direct download failed (%s) — falling back to chunks",
-                            _exc,
-                        )
+                        # Log only type + HTTP status code (never the full exception
+                        # which may embed the Authorization header in error messages)
+                        _status = getattr(getattr(_exc, "response", None), "status_code", None)
+                        if _status is not None:
+                            _logger.warning(
+                                "[export_csv] direct download HTTP %d — falling back to chunks",
+                                _status,
+                            )
+                        else:
+                            _logger.warning(
+                                "[export_csv] direct download failed (%s) — falling back to chunks",
+                                type(_exc).__name__,
+                            )
 
                 # ── 3b. read all chunks (fallback) ────────────────────────────
                 parts: list[str] = []

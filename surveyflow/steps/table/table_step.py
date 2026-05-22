@@ -58,6 +58,17 @@ _STAT_TYPES = {"t2b", "b2b", "mean", "std", "se"}
 
 # ── Cell helpers ───────────────────────────────────────────────────────────────
 
+_FORMULA_TRIGGER = ("=", "+", "-", "@", "\t", "\r")
+
+def _safe_str(v: Any) -> str:
+    """Prevent Excel formula injection by prepending a space to values that
+    would otherwise be interpreted as formulas (starting with =, +, -, @, etc.)."""
+    s = str(v) if v is not None else ""
+    if s and s[0] in _FORMULA_TRIGGER:
+        return " " + s
+    return s
+
+
 def _set(ws, row, col, val=None, *, font=None, fill=None, align=None,
          border=None, num_fmt=None):
     cell = ws.cell(row=row, column=col)
@@ -135,7 +146,7 @@ def _write_sheet(
 
     # ── Row 1: title ─────────────────────────────────────────────────
     _merge(ws, 1, 1, 1, DATA_COL + n_slots - 1)
-    _set(ws, 1, 1, config.get("title", "Data Table"),
+    _set(ws, 1, 1, _safe_str(config.get("title", "Data Table")),
          font=Font(bold=True, size=13, color="1F4E79"), align=_L)
     ws.row_dimensions[1].height = 22
 
@@ -143,7 +154,7 @@ def _write_sheet(
     sub_title = config.get("sub_title", "")
     if sub_title:
         _merge(ws, 2, 1, 2, DATA_COL + n_slots - 1)
-        _set(ws, 2, 1, sub_title,
+        _set(ws, 2, 1, _safe_str(sub_title),
              font=Font(bold=True, size=11, color="2E75B6"), align=_L)
         ws.row_dimensions[2].height = 18
     else:
@@ -179,7 +190,7 @@ def _write_sheet(
     for idx, (label, c1, c2, _) in enumerate(group_spans):
         thick = idx > 0   # thick left border between groups (not on the very first)
         _merge(ws, 5, c1, 5, c2)
-        _set(ws, 5, c1, label,
+        _set(ws, 5, c1, _safe_str(label),
              font=_WHITE_BOLD, fill=_F_GROUP, align=_C, border=_brd(thick))
     ws.row_dimensions[5].height = 20
 
@@ -219,7 +230,7 @@ def _write_sheet(
 
             if len(bc.level_labels) > level_idx:
                 _merge(ws, level_row, c1, level_row, c2)
-                _set(ws, level_row, c1, bc.level_labels[level_idx],
+                _set(ws, level_row, c1, _safe_str(bc.level_labels[level_idx]),
                      font=_WHITE_BOLD, fill=fill, align=_C, border=_brd(thick))
             else:
                 _merge(ws, level_row, c1, level_row, c2)
@@ -239,7 +250,7 @@ def _write_sheet(
             j += 1
         thick = slot["first_in_group"] and i > 0
         _merge(ws, DETAIL_ROW, c1, DETAIL_ROW, DATA_COL + j - 1)
-        _set(ws, DETAIL_ROW, c1, bc.subgroup_label,
+        _set(ws, DETAIL_ROW, c1, _safe_str(bc.subgroup_label),
              font=_DARK_BOLD, fill=_F_DETAIL, align=_C,
              border=_brd(thick, thick_bottom=detail_thick_bot))
         i = j
@@ -276,9 +287,9 @@ def _write_sheet(
         # Question header row (doubles as Base row)
         hdr_fill = _F_STAT if is_sub else _F_MID
         hdr_font = _BOLD if is_sub else _WHITE_BOLD
-        _set(ws, cur, 1, block.question_code,
+        _set(ws, cur, 1, _safe_str(block.question_code),
              font=hdr_font, fill=hdr_fill, align=_C, border=_brd(thick_bottom=True))
-        _set(ws, cur, 2, f"{block.question_label} ({block.answer_type})",
+        _set(ws, cur, 2, _safe_str(f"{block.question_label} ({block.answer_type})"),
              font=hdr_font, fill=hdr_fill, align=_L, border=_brd(thick_bottom=True))
         _set(ws, cur, 3, "Code",
              font=hdr_font, fill=hdr_fill, align=_C, border=_brd(thick_bottom=True))
@@ -332,7 +343,7 @@ def _write_sheet(
                  font=_NORMAL, fill=_row_fill,
                  align=_C, border=_brd(thick_bottom=is_last_row))
 
-            _set(ws, r, 4, stub_row.label,
+            _set(ws, r, 4, _safe_str(stub_row.label),
                  font=_lbl_font, fill=_row_fill,
                  align=_L, border=_brd(thick_bottom=is_last_row))
 
@@ -387,7 +398,7 @@ def _write_sheet(
             # ── Section header row (navy, full width) ────────────────
             last_col = DATA_COL + len(slots) - 1
             _merge(ws, cur, 1, cur, last_col)
-            _set(ws, cur, 1, block.row_label,
+            _set(ws, cur, 1, _safe_str(block.row_label),
                  font=_WHITE_BOLD, fill=_F_GROUP, align=_L,
                  border=_brd(thick_bottom=True))
             ws.row_dimensions[cur].height = 18
@@ -405,7 +416,7 @@ def _write_sheet(
                 last_col = DATA_COL + len(slots) - 1
                 _merge(ws, cur, 1, cur, last_col)
                 _set(ws, cur, 1,
-                     f"{block.question_code}  {block.question_label} (ranking)",
+                     _safe_str(f"{block.question_code}  {block.question_label} (ranking)"),
                      font=_WHITE_BOLD, fill=_F_GROUP, align=_L,
                      border=_brd(thick_bottom=True))
                 ws.row_dimensions[cur].height = 18

@@ -36,19 +36,24 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723394             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8928 - Transino - BHC" # str  — tên thư mục output
 
-SURVEY_ID   = 723368             # int  — survey ID từ QMe
-SURVEY_NAME = "VN8956 - SME HSR" # str  — tên thư mục output
+# SURVEY_ID   = 723368             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8956 - SME HSR" # str  — tên thư mục output
 
+# SURVEY_ID   = 723431             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8981 - JOY" # str  — tên thư mục output
 
+SURVEY_ID   = 723309             # int  — survey ID từ QMe
+SURVEY_NAME = "VN8955 - ACV" # str  — tên thư mục output
 
 
 # Bật/tắt từng bước
-FETCH_MCP   = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
-RUN_INGEST  = True  # True  = chạy lại ingestion (ghi đè data/)
+FETCH_MCP   = False   # True  = fetch lại data từ QMe (ghi đè mcp/)
+RUN_INGEST  = True   # True  = chạy lại ingestion (ghi đè data/)
 RUN_TABLE   = True   # True  = chạy table → datatable.xlsx
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
-TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
+# TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
+TABLE_VERSION = "V1"   # hoặc đặt cứng, ví dụ: "v2"
 
 # ── Fetch mode ──────────────────────────────────────────────
 # "rows"   = get_survey_definition + get_survey_rows

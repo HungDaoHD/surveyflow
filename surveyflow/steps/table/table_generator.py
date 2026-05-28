@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import re
 import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats as _scipy_stats
+
+logger = logging.getLogger(__name__)
 
 from surveyflow.steps.table.banner_builder import BannerColumn, _ma_col_map
 
@@ -176,6 +179,20 @@ def _compute_sig_marks(
     alpha95 = 0.05 if 95 in levels else None
     alpha90 = 0.10 if 90 in levels else None
 
+    # ── Performance optimisation ────────────────────────────────────────────
+    # Pre-compute a single numeric Series for *this* column (avoid slicing
+    # all 1000+ columns of the DataFrame on every banner-pair call).
+    code_int   = int(code)
+    col_num    = pd.to_numeric(df[col], errors="coerce").fillna(-1)
+
+    # Pre-compute the binary (0/1) array for every non-total banner column.
+    bc_arrs: dict[int, np.ndarray] = {}
+    for i, bc in enumerate(banner_cols):
+        if bc.is_total:
+            continue
+        bc_arrs[i] = (col_num[bc.mask] == code_int).astype(float).to_numpy()
+    # ────────────────────────────────────────────────────────────────────────
+
     # Group non-total column indices for pairwise comparison.
     # Columns are compared within the same (group_label, level_labels[0], …) bucket,
     # i.e. only against siblings that share all parent level labels.
@@ -188,60 +205,181 @@ def _compute_sig_marks(
 
     marks: dict[int, list[str]] = {i: [] for i in range(len(banner_cols))}
 
-    for grp_indices in groups.values():
-        for a in range(len(grp_indices)):
-            for b in range(a + 1, len(grp_indices)):
-                i1, i2 = grp_indices[a], grp_indices[b]
-                bc1, bc2 = banner_cols[i1], banner_cols[i2]
+    # Suppress scipy precision-loss warning once for all pairs (moving
+    # warnings.catch_warnings outside the loop avoids repeated context-manager
+    # overhead — previously the dominant cost for large banner × code grids).
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Precision loss occurred",
+            category=RuntimeWarning,
+        )
+        for grp_indices in groups.values():
+            for a in range(len(grp_indices)):
+                for b in range(a + 1, len(grp_indices)):
+                    i1, i2 = grp_indices[a], grp_indices[b]
+                    bc1, bc2 = banner_cols[i1], banner_cols[i2]
 
-                try:
-                    with warnings.catch_warnings():
-                        # Suppress scipy precision-loss warning that fires when one
-                        # group has zero variance (all respondents answered the same
-                        # way). The result is still valid (p = NaN → skipped below).
-                        warnings.filterwarnings(
-                            "ignore",
-                            message="Precision loss occurred",
-                            category=RuntimeWarning,
-                        )
+                    try:
                         if method == "related":
-                            # Paired t-test — only respondents present in BOTH groups
+                            # Paired t-test — only respondents present in BOTH groups.
+                            # Need per-respondent arrays aligned on the intersection,
+                            # so we slice col_num (single Series) rather than the full df.
                             both_mask = bc1.mask & bc2.mask
                             if int(both_mask.sum()) < 2:
                                 continue
-                            arr1 = _binary_array(df[both_mask], col, code, atype)
-                            arr2 = _binary_array(df[both_mask], col, code, atype)
-                            # arr1 and arr2 are identical when banner groups share the
-                            # same question column — difference is always 0.
-                            # Meaningful only when groups are defined on different
-                            # criteria so respondents answer differently in context.
+                            arr1 = (col_num[both_mask] == code_int).astype(float).to_numpy()
+                            arr2 = arr1  # same column → identical values in both contexts
                             t_stat, p_val = _scipy_stats.ttest_rel(arr1, arr2)
                         else:
-                            # Independent (Welch's) t-test
-                            arr1 = _binary_array(df[bc1.mask], col, code, atype)
-                            arr2 = _binary_array(df[bc2.mask], col, code, atype)
+                            # Independent (Welch's) t-test — reuse pre-computed arrays.
+                            arr1 = bc_arrs.get(i1)
+                            arr2 = bc_arrs.get(i2)
+                            if arr1 is None or arr2 is None:
+                                continue
                             if len(arr1) < 2 or len(arr2) < 2:
                                 continue
                             t_stat, p_val = _scipy_stats.ttest_ind(
                                 arr1, arr2, equal_var=False
                             )
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
 
-                if np.isnan(p_val):
-                    continue
+                    if np.isnan(p_val):
+                        continue
 
-                # winner (higher proportion) gets the loser's letter
-                winner = i1 if t_stat > 0 else i2
-                loser  = i2 if t_stat > 0 else i1
-                loser_letter = banner_cols[loser].letter
+                    # winner (higher proportion) gets the loser's letter
+                    winner = i1 if t_stat > 0 else i2
+                    loser  = i2 if t_stat > 0 else i1
+                    loser_letter = banner_cols[loser].letter
 
-                if alpha95 and p_val < alpha95:
-                    marks[winner].append(loser_letter.upper())
-                elif alpha90 and p_val < alpha90:
-                    marks[winner].append(loser_letter.lower())
+                    if alpha95 and p_val < alpha95:
+                        marks[winner].append(loser_letter.upper())
+                    elif alpha90 and p_val < alpha90:
+                        marks[winner].append(loser_letter.lower())
 
     return {i: "".join(marks[i]) for i in range(len(banner_cols))}
+
+
+def _compute_sig_for_col(
+    col: str,
+    codes: list[str],
+    df: pd.DataFrame,
+    banner_cols: list[BannerColumn],
+    sig_config: dict,
+) -> dict[str, dict[int, str]]:
+    """Vectorized sig test for ALL codes of a single SA column in one pass.
+
+    Faster than calling _compute_sig_marks per code because:
+    - col_num computed once (not once per code)
+    - col_num[bc.mask] sliced once per banner col (not once per code per banner col)
+    - Welch's t-test vectorized across all codes per pair via numpy broadcasting,
+      replacing scipy ttest_ind calls (K scipy calls → 1 numpy op per pair)
+
+    Applies to SA questions and Matrix_SA sub-questions where all codes share
+    the same rawdata column.  For MA (each code has its own binary column) the
+    per-code _compute_sig_marks path is unchanged.
+
+    Returns: {code_str: {banner_idx: mark_str}}
+    """
+    n_cols  = len(banner_cols)
+    _empty  = {c: {i: "" for i in range(n_cols)} for c in codes}
+    if not sig_config.get("enabled", False) or not codes:
+        return _empty
+
+    levels  = sig_config.get("levels", [95])
+    method  = sig_config.get("method", "independent")
+    alpha95 = 0.05 if 95 in levels else None
+    alpha90 = 0.10 if 90 in levels else None
+
+    # ── Pre-compute once per column ───────────────────────────────────────────
+    col_num   = pd.to_numeric(df[col], errors="coerce").fillna(-1)
+    code_ints = np.array([int(c) for c in codes], dtype=np.float64)  # (K,)
+
+    # Per banner col: slice col_num (shared across all codes)
+    bc_slices: dict[int, np.ndarray] = {
+        i: col_num[bc.mask].to_numpy()
+        for i, bc in enumerate(banner_cols) if not bc.is_total
+    }
+    # ─────────────────────────────────────────────────────────────────────────
+
+    groups: dict[str, list[int]] = {}
+    for i, bc in enumerate(banner_cols):
+        if bc.is_total:
+            continue
+        key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
+        groups.setdefault(key, []).append(i)
+
+    K = len(codes)
+    marks: dict[str, dict[int, list[str]]] = {c: {i: [] for i in range(n_cols)} for c in codes}
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Precision loss occurred", category=RuntimeWarning)
+
+        for grp_indices in groups.values():
+            for a in range(len(grp_indices)):
+                for b in range(a + 1, len(grp_indices)):
+                    i1, i2 = grp_indices[a], grp_indices[b]
+                    s1 = bc_slices.get(i1)
+                    s2 = bc_slices.get(i2)
+                    if s1 is None or s2 is None:
+                        continue
+                    n1, n2 = len(s1), len(s2)
+                    if n1 < 2 or n2 < 2:
+                        continue
+
+                    if method == "related":
+                        # same column → responses identical for both groups →
+                        # difference is always 0 → no meaningful test; skip.
+                        continue
+
+                    try:
+                        # ── Vectorized Welch's t-test across all K codes at once ──
+                        # arr_j shape: (n_j, K)  — row=respondent, col=code
+                        arr1 = (s1[:, None] == code_ints).astype(np.float64)
+                        arr2 = (s2[:, None] == code_ints).astype(np.float64)
+
+                        m1, m2 = arr1.mean(0), arr2.mean(0)       # (K,)
+                        v1 = arr1.var(0, ddof=1) if n1 > 1 else np.zeros(K)
+                        v2 = arr2.var(0, ddof=1) if n2 > 1 else np.zeros(K)
+
+                        v1n, v2n = v1 / n1, v2 / n2
+                        se    = np.sqrt(v1n + v2n)                # (K,)
+                        valid = se > 0
+
+                        t_stats = np.where(valid, (m1 - m2) / np.where(valid, se, 1.0), 0.0)
+
+                        # Welch-Satterthwaite degrees of freedom
+                        denom = (v1n ** 2 / (n1 - 1)) + (v2n ** 2 / (n2 - 1))
+                        df_w  = np.where(
+                            denom > 0,
+                            (v1n + v2n) ** 2 / np.where(denom > 0, denom, 1.0),
+                            1.0,
+                        )
+
+                        # scipy.stats.t.sf accepts array x and array df
+                        p_vals = np.where(
+                            valid,
+                            2.0 * _scipy_stats.t.sf(np.abs(t_stats), df=df_w),
+                            np.nan,
+                        )
+                    except Exception:
+                        continue
+
+                    for k in range(K):
+                        p_val  = p_vals[k]
+                        t_stat = t_stats[k]
+                        if np.isnan(p_val):
+                            continue
+                        winner = i1 if t_stat > 0 else i2
+                        loser  = i2 if t_stat > 0 else i1
+                        letter = banner_cols[loser].letter
+                        if alpha95 and p_val < alpha95:
+                            marks[codes[k]][winner].append(letter.upper())
+                        elif alpha90 and p_val < alpha90:
+                            marks[codes[k]][winner].append(letter.lower())
+
+    return {c: {i: "".join(marks[c][i]) for i in range(n_cols)} for c in codes}
 
 
 # ── New-format helpers ─────────────────────────────────────────────────────────
@@ -530,12 +668,22 @@ def _compute_row_group(
                         _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(nb)]
                     else:
                         _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(nb)]
+                    # SA: pre-compute sig for all codes at once (vectorized)
+                    _sa_sigs = (
+                        {} if is_sub_ma
+                        else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
+                    )
                     for code in _scodes:
                         cnts: dict[int, int]   = {i: _batch[i][code] for i in range(nb)}
                         pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(nb)}
+                        if is_sub_ma:
+                            _bin = _ma_col_map(sub_raw_cols).get(code)
+                            sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                        else:
+                            sig = _sa_sigs.get(code, {})
                         sub_rows.append(StubRow(
                             label=_choice_label(col_choices, code), row_type="percent",
-                            counts=cnts, values=pcts, code=code,
+                            counts=cnts, values=pcts, sig_marks=sig, code=code,
                         ))
 
             if sub_rows:
@@ -564,6 +712,7 @@ def compute_table(
     sig_config: dict,
     col_map: dict[str, str] | None = None,
     q_pos_to_meta: dict[str, dict] | None = None,
+    tag: str = "",
 ) -> list[StubBlock | RowGroupBlock | RankingBlock]:
     """Compute cross-tabulation blocks.
 
@@ -586,10 +735,15 @@ def compute_table(
     # Pre-slice once — reused for every question and every stat below.
     sub_dfs: list[pd.DataFrame] = [df[bc.mask] for bc in banner_cols]
 
-    for sc in stub_configs:
+    total = len(stub_configs)
+    _pfx  = f"{tag} — " if tag else ""
+
+    for q_idx, sc in enumerate(stub_configs, 1):
 
         # ── row_group entry ───────────────────────────────────────────────────
         if sc.get("row_group"):
+            grp_q = sc.get("items", [{}])[0].get("question", "row_group") if sc.get("items") else "row_group"
+            logger.info("%s[%d/%d] %s (row_group)", _pfx, q_idx, total, grp_q)
             row_blocks = _compute_row_group(
                 sc, banner_cols, df, sig_config, q_pos_to_meta or {}
             )
@@ -597,6 +751,7 @@ def compute_table(
             continue
 
         q = sc["question"]
+        logger.info("%s[%d/%d] %s", _pfx, q_idx, total, q)
 
         # ── sub-question reference: Q14_r10 syntax ────────────────────────────
         sub_ref = _parse_sub_q_ref(q, q_pos_to_meta or {})
@@ -644,12 +799,22 @@ def compute_table(
                         _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
                     else:
                         _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
+                    # SA: pre-compute sig for all codes at once (vectorized)
+                    _sa_sigs = (
+                        {} if is_sub_ma
+                        else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
+                    )
                     for code in _scodes:
                         cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
                         pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+                        if is_sub_ma:
+                            _bin = _ma_col_map(sub_raw_cols).get(code)
+                            sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                        else:
+                            sig = _sa_sigs.get(code, {})
                         sub_rows.append(StubRow(
                             label=_choice_label(col_choices, code), row_type="percent",
-                            counts=cnts, values=pcts, code=code,
+                            counts=cnts, values=pcts, sig_marks=sig, code=code,
                         ))
             if sub_rows:
                 blocks.append(StubBlock(
@@ -799,12 +964,22 @@ def compute_table(
                             _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
                         else:
                             _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
+                        # SA: pre-compute sig for all codes at once (vectorized)
+                        _sa_sigs = (
+                            {} if is_sub_ma
+                            else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
+                        )
                         for code in _scodes:
                             cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
                             pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+                            if is_sub_ma:
+                                _bin = _ma_col_map(sub_raw_cols).get(code)
+                                sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                            else:
+                                sig = _sa_sigs.get(code, {})
                             sub_rows.append(StubRow(
                                 label=_choice_label(col_choices, code), row_type="percent",
-                                counts=cnts, values=pcts, code=code,
+                                counts=cnts, values=pcts, sig_marks=sig, code=code,
                             ))
                 if sub_rows:
                     blocks.append(StubBlock(
@@ -978,6 +1153,13 @@ def compute_table(
                     _batch = [_code_counts_sc_batch(sub_dfs[i], q_col, sorted_codes)
                               for i in range(n)]
 
+                # SA: pre-compute sig marks for all codes in one vectorized pass.
+                # MA keeps per-code path (each code has its own binary column).
+                _sa_sigs: dict[str, dict] = (
+                    {} if is_ma
+                    else _compute_sig_for_col(q_col, sorted_codes, df, banner_cols, sig_config)
+                )
+
                 def _cnt_pct_union(target: list[str]) -> tuple[dict, dict]:
                     """Count/pct for a union of codes (group summary rows)."""
                     _cnts: dict[int, int]   = {}
@@ -1010,7 +1192,7 @@ def compute_table(
                             cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
                             pcts: dict[int, float] = {i: cnts[i] / bases[i] if bases[i] else 0.0
                                                       for i in range(n)}
-                            sig = _sig_for_code(code)
+                            sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
                             rows.append(StubRow(
                                 label=_choice_label(choices_i18n, code), row_type="percent",
                                 counts=cnts, values=pcts, sig_marks=sig, code=code,
@@ -1022,7 +1204,7 @@ def compute_table(
                         continue
                     cnts = {i: _batch[i][code] for i in range(n)}
                     pcts = {i: cnts[i] / bases[i] if bases[i] else 0.0 for i in range(n)}
-                    sig = _sig_for_code(code)
+                    sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
                     rows.append(StubRow(
                         label=_choice_label(choices_i18n, code), row_type="percent",
                         counts=cnts, values=pcts, sig_marks=sig, code=code,

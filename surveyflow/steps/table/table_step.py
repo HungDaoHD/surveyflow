@@ -129,7 +129,12 @@ def _write_sheet(
 ) -> None:
     cell_content = table_cfg.get("cell_content", "percentage")   # "count" | "percentage"
     show_sig     = table_cfg.get("show_sig", False)
-    sig_cfg      = config.get("significance_test", {"enabled": False})
+    # sig config comes from the sheet definition (levels + method per-sheet)
+    sig_cfg = {
+        "enabled": show_sig,
+        "levels":  table_cfg.get("levels", [90, 95]),
+        "method":  table_cfg.get("method", "independent"),
+    }
 
     _dec = table_cfg.get("decimal")
     pct_fmt = "0%" if _dec is None or _dec == 0 else ("0." + "0" * int(_dec) + "%")
@@ -168,8 +173,8 @@ def _write_sheet(
     ws.row_dimensions[3].height = 16
 
     # ── Row 4: sig test info (method + levels) ───────────────────────
-    if show_sig and sig_cfg.get("enabled"):
-        lvls   = sig_cfg.get("levels", [95])
+    if show_sig:
+        lvls   = sig_cfg.get("levels", [90, 95])
         method = sig_cfg.get("method", "independent").capitalize()
         parts  = []
         if 95 in lvls: parts.append("Uppercase = 95%")
@@ -537,9 +542,21 @@ class TableStep(Step):
         results:  list[dict] = []   # serialised  → consumed by API / preview
 
         for cfg_idx, (orig_idx, cfg) in enumerate(selected, 1):
-            sub_title  = cfg.get("sub_title", "")
-            sig_config = cfg.get("significance_test", {"enabled": False})
-            tag = f"[{cfg_idx}/{len(selected)}] {sub_title or 'config'}"
+            sub_title = cfg.get("sub_title", "")
+            tag       = f"[{cfg_idx}/{len(selected)}] {sub_title or 'config'}"
+
+            # Derive sig_config from tables array: union of levels across all enabled sig sheets.
+            _sig_levels: set = set()
+            _sig_method = "independent"
+            for _tbl in cfg.get("tables", []):
+                if _tbl.get("show_sig") and _tbl.get("enabled", True):
+                    _sig_levels.update(_tbl.get("levels", [90, 95]))
+                    _sig_method = _tbl.get("method", "independent")
+            sig_config = {
+                "enabled": bool(_sig_levels),
+                "levels":  sorted(_sig_levels) if _sig_levels else [90, 95],
+                "method":  _sig_method,
+            }
 
             t0 = time.perf_counter()
             logger.info("%s — building banner …", tag)
@@ -569,6 +586,7 @@ class TableStep(Step):
                 sig_config     = sig_config,
                 col_map        = col_map,
                 q_pos_to_meta  = q_pos_to_meta,
+                tag            = tag,
             )
             logger.info("%s — cross-tabs: %d blocks  (%.2fs)", tag, len(blocks),
                         time.perf_counter() - t0)
@@ -589,9 +607,8 @@ class TableStep(Step):
         context["table_results"] = [
             {
                 "table_index":       item["orig_idx"],
-                "title":             item["cfg"].get("title", ""),
-                "sub_title":         item["cfg"].get("sub_title", ""),
-                "significance_test": item["cfg"].get("significance_test", {"enabled": False}),
+                "title":       item["cfg"].get("title", ""),
+                "sub_title":   item["cfg"].get("sub_title", ""),
                 "banner_cols": [bc.to_dict() for bc in item["banner_cols"]],
                 "blocks":      [b.to_dict()  for b  in item["blocks"]],
                 "tables":      item["cfg"].get("tables", []),
@@ -679,10 +696,9 @@ class TableStep(Step):
             banner_cols = [self._bc_from_dict(d)    for d in item.get("banner_cols", [])]
             blocks      = [self._block_from_dict(d) for d in item.get("blocks", [])]
             cfg = {
-                "title":             item.get("title", ""),
-                "sub_title":         item.get("sub_title", ""),
-                "tables":            item.get("tables", []),
-                "significance_test": item.get("significance_test", {"enabled": False}),
+                "title":     item.get("title", ""),
+                "sub_title": item.get("sub_title", ""),
+                "tables":    item.get("tables", []),
             }
             computed.append({
                 "orig_idx":    item.get("table_index", 0),

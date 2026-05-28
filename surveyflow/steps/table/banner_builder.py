@@ -88,6 +88,7 @@ def build_banner(
     df: pd.DataFrame,
     col_map: dict[str, str] | None = None,
     q_pos_to_meta: dict[str, dict] | None = None,
+    custom_defs: dict[str, list] | None = None,
 ) -> list[BannerColumn]:
     """Return one BannerColumn per banner subgroup defined in config.
 
@@ -182,6 +183,41 @@ def build_banner(
         langs = meta.get("choices_i18n", {}).get(str(code), {})
         return langs.get("en") or langs.get("vi") or next(iter(langs.values()), str(code))
 
+    def _eval_filter(flt: dict) -> pd.Series:
+        """Evaluate a filter expression to a respondent boolean mask.
+
+        Supports:
+          {"and": [<filter>, ...]}
+          {"or":  [<filter>, ...]}
+          {"question": Q, "codes": [c, ...], "op": "any"|"all"}
+        """
+        if "and" in flt:
+            mask = pd.Series(True, index=df.index)
+            for sub in flt["and"]:
+                mask = mask & _eval_filter(sub)
+            return mask
+        if "or" in flt:
+            mask = pd.Series(False, index=df.index)
+            for sub in flt["or"]:
+                mask = mask | _eval_filter(sub)
+            return mask
+        q_ref = flt["question"]
+        codes = [int(c) for c in flt.get("codes", [])]
+        op    = flt.get("op", "any")
+        meta  = _get_meta(q_ref)
+        if meta.get("answer_type") == "MA" and op == "all":
+            rawdata_cols = meta.get("rawdata_columns", [])
+            col_for_code = _ma_col_map(rawdata_cols)
+            all_mask = pd.Series(True, index=df.index)
+            for c in codes:
+                col = col_for_code.get(str(c))
+                if col and col in df.columns:
+                    all_mask = all_mask & (pd.to_numeric(df[col], errors="coerce").fillna(0) == 1)
+                else:
+                    return pd.Series(False, index=df.index)
+            return all_mask
+        return _make_mask(q_ref, value=None, values=codes)
+
     def _expand_with_levels(entry: dict, group_label: str) -> list[BannerColumn]:
         """Handle banner entries with ``levels`` (multi-level nesting) or ``show_total``.
 
@@ -242,8 +278,16 @@ def build_banner(
                 counter[0] += 1
                 return
 
-            lv     = remaining[0]
-            rest   = remaining[1:]
+            lv   = remaining[0]
+            rest = remaining[1:]
+
+            if lv.get("type") == "custom_ref":
+                for choice in (custom_defs or {}).get(lv.get("ref", ""), []):
+                    flt    = choice.get("filter", {})
+                    c_mask = parent_mask & (_eval_filter(flt) if flt else pd.Series(True, index=df.index))
+                    _recurse(c_mask, rest, path + [choice["label"]])
+                return
+
             lq     = lv.get("question", "")
             lgrps  = lv.get("groups", [])
             show_t = lv.get("show_total", False)
@@ -285,6 +329,58 @@ def build_banner(
             group_label = f"{entry['question']} - {entry['label']}"
         else:
             group_label = entry["label"]
+
+        # ── custom_ref — expand using _custom_defs choices ────────────────────
+        # Entry: {"type": "custom_ref", "ref": "Users", "label": "...", "levels": [...]}
+        # Each choice in the def becomes a BannerColumn (or nested columns when levels present).
+        if entry.get("type") == "custom_ref":
+            ref_choices = (custom_defs or {}).get(entry.get("ref", ""), [])
+            levels      = entry.get("levels", [])
+            result_ref: list[BannerColumn] = []
+            counter_ref: list[int]         = [0]
+
+            def _recurse_ref(
+                parent_mask: pd.Series,
+                remaining:   list,
+                path:        list[str],
+            ) -> None:
+                if not remaining:
+                    result_ref.append(BannerColumn(
+                        group_label    = group_label,
+                        subgroup_label = path[-1] if path else group_label,
+                        letter         = _letter(counter_ref[0]),
+                        mask           = parent_mask,
+                        is_total       = False,
+                        level_labels   = path[:-1],
+                    ))
+                    counter_ref[0] += 1
+                    return
+                lv   = remaining[0]
+                rest = remaining[1:]
+                if lv.get("type") == "custom_ref":
+                    for choice in (custom_defs or {}).get(lv.get("ref", ""), []):
+                        flt    = choice.get("filter", {})
+                        c_mask = parent_mask & (_eval_filter(flt) if flt else pd.Series(True, index=df.index))
+                        _recurse_ref(c_mask, rest, path + [choice["label"]])
+                    return
+                lq     = lv.get("question", "")
+                lgrps  = lv.get("groups", [])
+                show_t = lv.get("show_total", False)
+                if show_t and lgrps:
+                    _recurse_ref(parent_mask, rest, path + ["Total"])
+                if not lgrps:
+                    _recurse_ref(parent_mask, rest, path + [lv.get("label") or lq])
+                else:
+                    for g in lgrps:
+                        g_mask = parent_mask & _make_mask(lq, g.get("value"), g.get("values"))
+                        _recurse_ref(g_mask, rest, path + [g["label"]])
+
+            for choice in ref_choices:
+                flt    = choice.get("filter", {})
+                c_mask = _eval_filter(flt) if flt else pd.Series(True, index=df.index)
+                _recurse_ref(c_mask, levels, [choice["label"]])
+            columns.extend(result_ref)
+            continue
 
         # ── Total ──────────────────────────────────────────────────────────────
         # Detect Total: no "groups", no "question", no "cross" key.

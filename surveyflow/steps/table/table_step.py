@@ -131,6 +131,9 @@ def _write_sheet(
     show_sig     = table_cfg.get("show_sig", False)
     sig_cfg      = config.get("significance_test", {"enabled": False})
 
+    _dec = table_cfg.get("decimal")
+    pct_fmt = "0%" if _dec is None or _dec == 0 else ("0." + "0" * int(_dec) + "%")
+
     slots   = _banner_layout(banner_cols, show_sig)
     n_slots = len(slots)
     DATA_COL = 5   # col E is first data column
@@ -375,11 +378,11 @@ def _write_sheet(
                     fnt = _DARK_BOLD if is_stat else (_BOLD if is_group else _NORMAL)
                 elif stub_row.row_type in ("percent", "group"):
                     val = float(raw) if raw is not None else 0.0
-                    fmt = "0%"
+                    fmt = pct_fmt
                     fnt = _BOLD if is_group else _NORMAL
                 else:
                     val = float(raw) if raw is not None else 0.0
-                    fmt = "0%" if stub_row.row_type in ("t2b", "b2b") else "0.00"
+                    fmt = pct_fmt if stub_row.row_type in ("t2b", "b2b") else "0.00"
                     fnt = _DARK_BOLD
 
                 _set(ws, r, col, val,
@@ -504,12 +507,29 @@ class TableStep(Step):
 
         all_configs: list[dict] = raw_config if isinstance(raw_config, list) else [raw_config]
 
+        # Extract _custom_defs lookup — used by Nhóm 2 (custom_ref banner resolution)
+        custom_defs: dict[str, list] = {}
+        for _item in all_configs:
+            if "_custom_defs" in _item:
+                for _defn in _item["_custom_defs"]:
+                    custom_defs[_defn["label"]] = _defn.get("choices", [])
+        context["_custom_defs"] = custom_defs
+
+        # Only process datatable-type configs; skip _custom_defs blocks and quota/unknown types.
+        # Items without a "type" field are treated as "datatable" (backwards compatibility).
+        _DATATABLE_TYPES = {"datatable", None}
+        def _is_datatable(cfg: dict) -> bool:
+            return "_custom_defs" not in cfg and cfg.get("type") in _DATATABLE_TYPES
+
         # Filter to requested indices (preserve original index for reference)
         indices = context.get("table_indices")   # list[int] | None
         if indices is not None:
-            selected = [(i, all_configs[i]) for i in indices if 0 <= i < len(all_configs)]
+            selected = [
+                (i, all_configs[i]) for i in indices
+                if 0 <= i < len(all_configs) and _is_datatable(all_configs[i])
+            ]
         else:
-            selected = list(enumerate(all_configs))
+            selected = [(i, cfg) for i, cfg in enumerate(all_configs) if _is_datatable(cfg)]
 
         col_map, q_pos_to_meta = _build_lookup_maps(metadata)
 
@@ -523,7 +543,8 @@ class TableStep(Step):
 
             t0 = time.perf_counter()
             logger.info("%s — building banner …", tag)
-            banner_cols = build_banner(cfg, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta)
+            banner_cols = build_banner(cfg, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta,
+                                       custom_defs=custom_defs)
 
             bm = cfg.get("banner_matrix")
             if bm:
@@ -541,7 +562,7 @@ class TableStep(Step):
             t0 = time.perf_counter()
             logger.info("%s — computing cross-tabs …", tag)
             blocks = compute_table(
-                stub_configs   = cfg["stub"],
+                stub_configs   = cfg.get("stub", []),
                 banner_cols    = banner_cols,
                 df             = df,
                 metadata       = metadata,

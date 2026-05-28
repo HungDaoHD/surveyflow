@@ -239,16 +239,16 @@ When user says things like:
 
 `datatable.json` is an **array** — mỗi item là 1 table config độc lập, sinh ra các sheets riêng trong cùng 1 file xlsx.
 
+**Kiểu item trong array:**
+- `{ "type": "datatable", ... }` → bảng chéo thông thường (hoặc bỏ qua `type`, default là datatable)
+- `{ "_custom_defs": [...] }` → khối định nghĩa filter dùng chung (không sinh sheet, chỉ dùng để tham chiếu)
+
 ```json
 [
   {
+    "type": "datatable",
     "title": "SURVEY_NAME - Data Table",
     "sub_title": "General",
-    "significance_test": {
-      "enabled": true,
-      "levels": [90, 95],
-      "method": "independent"
-    },
     "banner": [
       { "label": "Total", "filter": null },
       {
@@ -266,8 +266,8 @@ When user says things like:
     ],
     "tables": [
       { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
-      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true },
-      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "enabled": true }
+      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 },
+      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "levels": [90, 95], "method": "independent", "enabled": true }
     ]
   }
 ]
@@ -282,6 +282,79 @@ Sheet tab name = `{sub_title} - {sheet}` → ví dụ `"General - Count"`, `"Gen
 - **Question reference: use the question label** (e.g. `"Q10"`) — this is the `label` field in metadata.json
 - To find choice codes → read `output/SURVEY_NAME/data/metadata.json` → find question → inspect `choices_i18n`
 - **MA questions are supported as banner** — each code becomes a column; respondents can appear in multiple columns
+
+#### show_total — thêm cột Total trước các sub-groups
+
+Thêm `"show_total": true` vào banner entry để tự động thêm cột "Total" (tất cả respondents có answer câu đó) ngay trước các sub-group columns:
+
+```json
+{
+  "label": "Area",
+  "question": "S3a",
+  "groups": [
+    { "label": "Hà Nội",   "value": 1 },
+    { "label": "HCM",      "value": 2 }
+  ],
+  "show_total": true
+}
+```
+
+Nếu **bất kỳ** banner entry nào có `show_total: true`, cột Total chung ở đầu sẽ bị ẩn (mỗi group đã có Total riêng).
+
+`show_total` cũng dùng được trong mảng `levels` để thêm Total ở từng cấp nested.
+
+### _custom_defs + custom_ref — reusable filter groups
+
+Khi nhiều bảng (table items) cùng dùng 1 bộ filter giống nhau (ví dụ: User groups theo brand sử dụng), định nghĩa 1 lần trong `_custom_defs` rồi tham chiếu qua `custom_ref`.
+
+**Bước 1 — Định nghĩa** (item đầu tiên trong array, không có `type`):
+```json
+{
+  "_custom_defs": [
+    {
+      "label": "Users",
+      "choices": [
+        {
+          "code": 1,
+          "label": "Brand A users",
+          "filter": { "question": "S11b", "codes": [1, 2] }
+        },
+        {
+          "code": 2,
+          "label": "Brand B users",
+          "filter": { "and": [
+            { "question": "S11b", "codes": [3, 4] },
+            { "question": "S4",   "codes": [2, 3] }
+          ]}
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Bước 2 — Tham chiếu** trong `banner` của bất kỳ table item nào:
+```json
+{ "type": "custom_ref", "ref": "Users", "label": "Users" }
+```
+
+Cũng dùng được bên trong mảng `levels` để tạo nested header:
+```json
+{
+  "label": "Gender",
+  "question": "S5",
+  "groups": [{ "label": "Nam", "value": 1 }, { "label": "Nữ", "value": 2 }],
+  "levels": [
+    { "type": "custom_ref", "ref": "Users", "label": "Users" }
+  ]
+}
+```
+→ Header 3 cấp: `Gender / Nam|Nữ / Brand A|Brand B`
+
+**Filter syntax trong `_custom_defs`:**
+- Leaf: `{ "question": "Qx", "codes": [1,2,3], "op": "any" }` — `op` default là `"any"` (chọn ít nhất 1 code)
+- AND: `{ "and": [ ...leaf... ] }`
+- OR: `{ "or": [ ...leaf... ] }`
 
 ### banner_matrix — Matrix rows as nested banner columns
 
@@ -365,11 +438,18 @@ Dùng `row_group: true` khi muốn nhóm nhiều câu matrix có chung `choices_
 - Khi khởi tạo lần đầu: tạo đúng theo lựa chọn của user ở Step 4
 - Sau khi đã có datatable.json: không thay đổi `tables` trừ khi user yêu cầu
 - `enabled: false` → sheet đó bị bỏ qua khi chạy
+- **`decimal`** — số chữ số thập phân cho cột percentage: `0` → "0%" (mặc định), `1` → "0.0%", `2` → "0.00%"
+- **Sig test config** đặt **trên từng sheet** (không dùng block `significance_test` cấp trên nữa):
+  - `show_sig: true` → bật sig test cho sheet đó
+  - `levels` (optional, default `[90, 95]`) → danh sách confidence levels
+  - `method` (optional, default `"independent"`) → `"independent"` (Welch's) hoặc `"related"` (paired)
 - Mapping lựa chọn → sheets:
   - Count only → `[{ "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true }]`
-  - Pct only   → `[{ "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true }]`
-  - Sig        → `[{ "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "enabled": true }]`
+  - Pct only   → `[{ "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 }]`
+  - Sig        → `[{ "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "levels": [90, 95], "method": "independent", "enabled": true }]`
   - Tất cả    → cả 3 sheets: Count + Pct + Sig
+
+> ⚠️ Block `significance_test` ở cấp trên (nếu còn trong file cũ) bị **bỏ qua hoàn toàn**. Sig config chỉ đọc từ `tables[]`.
 
 ---
 
@@ -417,10 +497,16 @@ output/SURVEY_NAME/
 | "bỏ Q15 khỏi stub" | Remove Q15 entry from `stub` array |
 | "thêm mean std cho Q36" | Add `"mean"`, `"std"` to Q36's `stats` |
 | "thêm tất cả câu vào stub" | Add all codeable questions to `stub` |
-| "tắt sig test" | Set `significance_test.enabled = false` |
+| "tắt sig test" | Xoá `show_sig: true` hoặc set `"show_sig": false` trên sheet Sig |
+| "bật sig test 90% và 95%" | Thêm `"show_sig": true, "levels": [90, 95]` vào sheet Sig |
+| "hiện 1 chữ số thập phân" | Thêm `"decimal": 1` vào sheet Pct |
+| "thêm total cho từng banner group" | Thêm `"show_total": true` vào banner entry tương ứng |
 | "chỉ chạy 1 sheet percentage" | Modify `tables` to keep only Pct sheet |
 | "nhóm Q13/Q14/Q17 theo brand" | Dùng `row_group: true` với các câu đó trong stub |
 | "thêm SK ZIC riêng cho Q17" | Thêm `Q17_r{n}` sub-question ref vào stub |
+| "tạo filter group dùng chung" | Tạo item `_custom_defs` đầu array, định nghĩa `choices` với `filter` |
+| "thêm user groups vào banner" | Thêm `{ "type": "custom_ref", "ref": "DefName" }` vào banner |
+| "user groups × area nested" | Dùng `levels: [{ "type": "custom_ref", ... }]` trong banner entry |
 | "brand làm header, tất cả brands" | Thêm `banner_matrix: { question: "QX" }` (không có groups) |
 | "brand header, Castrol và Shell riêng, nhóm International" | Thêm `banner_matrix` với `groups` mix `row_code`/`row_codes` |
 | "bảng bình thường + bảng matrix brand" | Tạo 2 items trong array: 1 không có banner_matrix, 1 có |

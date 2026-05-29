@@ -713,6 +713,7 @@ def compute_table(
     col_map: dict[str, str] | None = None,
     q_pos_to_meta: dict[str, dict] | None = None,
     tag: str = "",
+    custom_defs: dict[str, list] | None = None,
 ) -> list[StubBlock | RowGroupBlock | RankingBlock]:
     """Compute cross-tabulation blocks.
 
@@ -722,6 +723,10 @@ def compute_table(
         Maps ``q{pos}`` reference → actual df column name (label).
     q_pos_to_meta
         Maps ``q{pos}`` reference → metadata entry dict.
+    custom_defs
+        Reusable filter-group definitions from ``_custom_defs`` array items.
+        Keys are group labels; values are lists of choice dicts
+        ``{"code": int, "label": str, "filter": {...}}``.
     """
 
     def _resolve(q: str) -> str:
@@ -729,6 +734,49 @@ def compute_table(
 
     def _get_meta(q: str) -> dict | None:
         return q_pos_to_meta.get(q) if q_pos_to_meta else None
+
+    def _eval_filter_stub(flt: dict) -> pd.Series:
+        """Recursively evaluate a _custom_defs filter against the full df."""
+        if not flt:
+            return pd.Series(True, index=df.index)
+        if "and" in flt:
+            mask = pd.Series(True, index=df.index)
+            for sub in flt["and"]:
+                mask = mask & _eval_filter_stub(sub)
+            return mask
+        if "or" in flt:
+            mask = pd.Series(False, index=df.index)
+            for sub in flt["or"]:
+                mask = mask | _eval_filter_stub(sub)
+            return mask
+        # Leaf
+        q_ref  = flt.get("question", "")
+        codes  = [int(c) for c in flt.get("codes", [])]
+        negate = flt.get("negate", False)
+        op     = flt.get("op", "any")
+        col    = _resolve(q_ref)
+        q_meta_f = _get_meta(q_ref)
+        atype_f  = q_meta_f.get("answer_type", "") if q_meta_f else ""
+
+        if col in df.columns:
+            mask = pd.to_numeric(df[col], errors="coerce").isin(codes)
+        elif atype_f == "MA":
+            raw_cols_f = q_meta_f.get("rawdata_columns", []) if q_meta_f else []
+            cm_f = _ma_col_map(raw_cols_f)
+            sub_masks = [
+                pd.to_numeric(df[cm_f[str(c)]], errors="coerce") == 1
+                for c in codes if str(c) in cm_f and cm_f[str(c)] in df.columns
+            ]
+            if sub_masks:
+                mask = sub_masks[0]
+                for m in sub_masks[1:]:
+                    mask = (mask & m) if op == "all" else (mask | m)
+            else:
+                mask = pd.Series(False, index=df.index)
+        else:
+            mask = pd.Series(False, index=df.index)
+
+        return ~mask if negate else mask
 
     blocks: list[StubBlock | RowGroupBlock | RankingBlock] = []
     n = len(banner_cols)
@@ -750,7 +798,58 @@ def compute_table(
             blocks.extend(row_blocks)
             continue
 
-        q = sc["question"]
+        # ── custom_ref stub entry ─────────────────────────────────────────────
+        if sc.get("type") == "custom_ref":
+            ref_name  = sc.get("ref", "")
+            choices   = (custom_defs or {}).get(ref_name, [])
+            req_stats = sc.get("stats", ["base", "percent"])
+            logger.info("%s[%d/%d] custom_ref:%s (%d choices)", _pfx, q_idx, total, ref_name, len(choices))
+            if not choices:
+                logger.warning("%s custom_ref '%s' not found in _custom_defs — skipping", _pfx, ref_name)
+                continue
+            # Base = all respondents per banner column
+            cr_bases: dict[int, int] = {i: int(bc.mask.sum()) for i, bc in enumerate(banner_cols)}
+            cr_rows: list[StubRow] = []
+            for stat in DEFAULT_STATS_ORDER:
+                if stat not in req_stats:
+                    continue
+                if stat == "base":
+                    cr_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(cr_bases),
+                        values={i: float(v) for i, v in cr_bases.items()},
+                    ))
+                elif stat == "percent":
+                    for choice in choices:
+                        flt    = choice.get("filter", {})
+                        c_mask = _eval_filter_stub(flt) if flt else pd.Series(True, index=df.index)
+                        cnts: dict[int, int]   = {}
+                        pcts: dict[int, float] = {}
+                        for i, bc in enumerate(banner_cols):
+                            cnt     = int((bc.mask & c_mask).sum())
+                            base    = cr_bases[i]
+                            cnts[i] = cnt
+                            pcts[i] = cnt / base if base else 0.0
+                        cr_rows.append(StubRow(
+                            label    = choice.get("label", str(choice.get("code", ""))),
+                            row_type = "percent",
+                            counts   = cnts,
+                            values   = pcts,
+                            code     = str(choice.get("code", "")),
+                        ))
+            if cr_rows:
+                blocks.append(StubBlock(
+                    question_code  = "_custom__",
+                    question_label = ref_name,
+                    answer_type    = "Custom",
+                    rows           = cr_rows,
+                ))
+            continue
+
+        q = sc.get("question")
+        if not q:
+            logger.warning("%s[%d/%d] skipping stub entry with no 'question' key: %s", _pfx, q_idx, total, sc)
+            continue
         logger.info("%s[%d/%d] %s", _pfx, q_idx, total, q)
 
         # ── sub-question reference: Q14_r10 syntax ────────────────────────────

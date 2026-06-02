@@ -588,6 +588,7 @@ class TableStep(Step):
                 q_pos_to_meta  = q_pos_to_meta,
                 tag            = tag,
                 custom_defs    = context.get("_custom_defs"),
+                lang           = context.get("lang", "vi"),
             )
             logger.info("%s — cross-tabs: %d blocks  (%.2fs)", tag, len(blocks),
                         time.perf_counter() - t0)

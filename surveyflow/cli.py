@@ -150,6 +150,17 @@ def main(argv: list[str] | None = None) -> None:
         default="approved",
         help="Comma-separated statuses e.g. approved,pending",
     )
+    parser.add_argument(
+        "--run-quality",
+        action="store_true",
+        help="Run quality check step (show_condition + contradiction validation). "
+             "Writes quality/quality_report.json and quality/flagged_profiles.csv.",
+    )
+    parser.add_argument(
+        "--lang",
+        default="vi",
+        help="Display language for table labels: 'vi' (default) or 'en'.",
+    )
     args = parser.parse_args(argv)
 
     output_dir = Path(args.output_dir)
@@ -194,11 +205,21 @@ def main(argv: list[str] | None = None) -> None:
         profile_status   = statuses,
         version          = args.version,
         datatable_config = datatable_config,
+        run_quality      = args.run_quality,
+        lang             = args.lang,
     )).run()
 
     print("\n--- Output ---")
     print(f"  rawdata  : {result['rawdata_path']}")
     print(f"  metadata : {result['metadata_path']}")
+    if "quality_report_path" in result:
+        rpt = result["quality_report"]
+        s   = rpt.get("summary", {})
+        print(f"  quality  : {result['quality_report_path']}")
+        print(f"             flagged={s.get('flagged_count',0)}  "
+              f"extra={s.get('show_condition_extra',0)}  "
+              f"missing={s.get('show_condition_missing',0)}  "
+              f"contradiction={s.get('contradiction',0)}")
     if "datatable_path" in result:
         print(f"  datatable: {result['datatable_path']}")
     print(f"  rows     : {result['rawdata'].shape[0]}")

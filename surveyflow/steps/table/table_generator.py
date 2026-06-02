@@ -513,17 +513,35 @@ def _code_count_rank_any(sub: pd.DataFrame, rank_cols: list[str], code: str) -> 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def _choice_label(choices_i18n: dict, code: str) -> str:
-    """Get display label for a choice code. Prefer 'en', fall back to first language."""
+def _i18n(d: dict, lang: str, fallback: str = "") -> str:
+    """Pick the best label from an i18n dict given a preferred language.
+
+    Priority: lang → "en" → "vi" → first available value → fallback
+    """
+    if not d:
+        return fallback
+    val = d.get(lang)
+    if val:
+        return val
+    for alt in ("en", "vi"):
+        if alt != lang:
+            val = d.get(alt)
+            if val:
+                return val
+    return next((v for v in d.values() if v), fallback)
+
+
+def _choice_label(choices_i18n: dict, code: str, lang: str = "vi") -> str:
+    """Get display label for a choice code in the requested language."""
     entry = choices_i18n.get(str(code), {})
     if not entry:
         return str(code)
-    return entry.get("en") or entry.get("vi") or next(iter(entry.values()), str(code))
+    return _i18n(entry, lang, str(code))
 
 
-def _row_label_text(v: object) -> str:
+def _row_label_text(v: object, lang: str = "vi") -> str:
     if isinstance(v, dict):
-        return v.get("en") or v.get("vi") or next(iter(v.values()), "")
+        return _i18n(v, lang)
     return str(v)
 
 
@@ -596,6 +614,7 @@ def _compute_row_group(
     df: pd.DataFrame,
     sig_config: dict,
     q_pos_to_meta: dict,
+    lang: str = "vi",
 ) -> list[RowGroupBlock]:
     """Compute blocks for a row_group stub entry.
 
@@ -611,7 +630,7 @@ def _compute_row_group(
     result: list[RowGroupBlock] = []
 
     for row_code, row_label_raw in shared_rows.items():
-        row_label  = _row_label_text(row_label_raw)
+        row_label  = _row_label_text(row_label_raw, lang)
         sub_blocks: list[StubBlock] = []
 
         for item in items:
@@ -640,8 +659,7 @@ def _compute_row_group(
 
             item_label = (
                 item.get("label")
-                or q_meta.get("question_i18n", {}).get("en")
-                or q_meta.get("question_i18n", {}).get("vi")
+                or _i18n(q_meta.get("question_i18n", {}), lang)
                 or q
             )
             req_stats = item.get("stats", ["base", "percent"])
@@ -682,7 +700,7 @@ def _compute_row_group(
                         else:
                             sig = _sa_sigs.get(code, {})
                         sub_rows.append(StubRow(
-                            label=_choice_label(col_choices, code), row_type="percent",
+                            label=_choice_label(col_choices, code, lang), row_type="percent",
                             counts=cnts, values=pcts, sig_marks=sig, code=code,
                         ))
 
@@ -714,11 +732,15 @@ def compute_table(
     q_pos_to_meta: dict[str, dict] | None = None,
     tag: str = "",
     custom_defs: dict[str, list] | None = None,
+    lang: str = "vi",
 ) -> list[StubBlock | RowGroupBlock | RankingBlock]:
     """Compute cross-tabulation blocks.
 
     Parameters
     ----------
+    lang
+        Display language for question / choice labels (default ``"vi"``).
+        Passed through to :func:`_choice_label` and :func:`_row_label_text`.
     col_map
         Maps ``q{pos}`` reference → actual df column name (label).
     q_pos_to_meta
@@ -734,6 +756,19 @@ def compute_table(
 
     def _get_meta(q: str) -> dict | None:
         return q_pos_to_meta.get(q) if q_pos_to_meta else None
+
+    def _clabel(choices: dict, code: str) -> str:
+        """Language-aware choice label."""
+        return _choice_label(choices, code, lang)
+
+    def _rlabel(v: object) -> str:
+        """Language-aware row label."""
+        return _row_label_text(v, lang)
+
+    def _qlabel_from_meta(q_meta: dict, fallback: str = "") -> str:
+        """Language-aware question label from question_i18n."""
+        qi = q_meta.get("question_i18n", {})
+        return _i18n(qi, lang) or q_meta.get("label", fallback) or fallback
 
     def _eval_filter_stub(flt: dict) -> pd.Series:
         """Recursively evaluate a _custom_defs filter against the full df."""
@@ -793,7 +828,7 @@ def compute_table(
             grp_q = sc.get("items", [{}])[0].get("question", "row_group") if sc.get("items") else "row_group"
             logger.info("%s[%d/%d] %s (row_group)", _pfx, q_idx, total, grp_q)
             row_blocks = _compute_row_group(
-                sc, banner_cols, df, sig_config, q_pos_to_meta or {}
+                sc, banner_cols, df, sig_config, q_pos_to_meta or {}, lang=lang
             )
             blocks.extend(row_blocks)
             continue
@@ -867,9 +902,7 @@ def compute_table(
             parent_label_q = _SUB_Q_RE.match(q).group(1)  # type: ignore[union-attr]
             parent_meta    = (q_pos_to_meta or {}).get(parent_label_q, {})
             default_label  = (
-                (parent_meta.get("question_i18n", {}).get("en") or
-                 parent_meta.get("question_i18n", {}).get("vi") or
-                 parent_label_q)
+                (_i18n(parent_meta.get("question_i18n", {}), lang) or parent_label_q)
                 + f" — {sub_ref.get('row_label', q)}"
             )
             q_label = sc.get("label") or default_label
@@ -912,7 +945,7 @@ def compute_table(
                         else:
                             sig = _sa_sigs.get(code, {})
                         sub_rows.append(StubRow(
-                            label=_choice_label(col_choices, code), row_type="percent",
+                            label=_clabel(col_choices, code), row_type="percent",
                             counts=cnts, values=pcts, sig_marks=sig, code=code,
                         ))
             if sub_rows:
@@ -938,8 +971,7 @@ def compute_table(
         # Question label: datatable config > question_i18n["en"] > label > q
         q_label = (
             sc.get("label")
-            or q_meta.get("question_i18n", {}).get("en")
-            or q_meta.get("question_i18n", {}).get("vi")
+            or _i18n(q_meta.get("question_i18n", {}), lang)
             or q_meta.get("label")
             or q
         )
@@ -1019,7 +1051,7 @@ def compute_table(
                             cnts[i] = cnt
                             pcts[i] = cnt / base if base else 0.0
                         p_rows.append(StubRow(
-                            label=_choice_label(col_choices, code), row_type="percent",
+                            label=_clabel(col_choices, code), row_type="percent",
                             counts=cnts, values=pcts, code=code,
                         ))
             if p_rows:
@@ -1077,7 +1109,7 @@ def compute_table(
                             else:
                                 sig = _sa_sigs.get(code, {})
                             sub_rows.append(StubRow(
-                                label=_choice_label(col_choices, code), row_type="percent",
+                                label=_clabel(col_choices, code), row_type="percent",
                                 counts=cnts, values=pcts, sig_marks=sig, code=code,
                             ))
                 if sub_rows:
@@ -1136,7 +1168,7 @@ def compute_table(
                                 rank_cols[0], code, "SA", df, banner_cols, sig_config
                             )
                             any_rows.append(StubRow(
-                                label=_choice_label(choices_i18n, code), row_type="percent",
+                                label=_clabel(choices_i18n, code), row_type="percent",
                                 counts=cnts, values=pcts, sig_marks=sig, code=code,
                             ))
                 flat_block = StubBlock(
@@ -1180,7 +1212,7 @@ def compute_table(
                                     rank_cols[rank_pos - 1], code, "SA", df, banner_cols, sig_config
                                 )
                                 rank_rows.append(StubRow(
-                                    label=_choice_label(choices_i18n, code), row_type="percent",
+                                    label=_clabel(choices_i18n, code), row_type="percent",
                                     counts=cnts, values=pcts, sig_marks=sig, code=code,
                                 ))
                     if rank_rows:
@@ -1293,7 +1325,7 @@ def compute_table(
                                                       for i in range(n)}
                             sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
                             rows.append(StubRow(
-                                label=_choice_label(choices_i18n, code), row_type="percent",
+                                label=_clabel(choices_i18n, code), row_type="percent",
                                 counts=cnts, values=pcts, sig_marks=sig, code=code,
                             ))
 
@@ -1305,7 +1337,7 @@ def compute_table(
                     pcts = {i: cnts[i] / bases[i] if bases[i] else 0.0 for i in range(n)}
                     sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
                     rows.append(StubRow(
-                        label=_choice_label(choices_i18n, code), row_type="percent",
+                        label=_clabel(choices_i18n, code), row_type="percent",
                         counts=cnts, values=pcts, sig_marks=sig, code=code,
                     ))
 

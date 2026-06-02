@@ -48,3 +48,5 @@ class PipelineConfig:
     datatable_config: Optional[str | dict] = None
     version:          Optional[str]        = None
     table_indices:    Optional[list[int]]  = None   # None = all tables; [0,2] = only table 0 and 2
+    run_quality:      bool                 = False  # True → run QualityStep after ingestion
+    lang:             str                  = "vi"   # Display language for table labels ("vi" | "en" | ...)

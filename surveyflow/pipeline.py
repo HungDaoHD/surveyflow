@@ -74,6 +74,7 @@ class Pipeline:
             "skip_render":    cfg.skip_render,
             "table_indices":  cfg.table_indices,
             "version":        version,
+            "lang":           cfg.lang,
         }
 
         # ── Step 1: Ingestion ──────────────────────────────────────────────
@@ -104,7 +105,14 @@ class Pipeline:
             context["rawdata_path"]  = str(rawdata_path)
             context["metadata_path"] = str(metadata_path)
 
-        # ── Step 2: Table (optional) ───────────────────────────────────────
+        # ── Step 2: Quality check (optional, standalone) ──────────────────
+        if cfg.run_quality:
+            from surveyflow.steps.quality.quality_step import QualityStep
+            logger.info("── Step 2: Quality check")
+            context["base_output_dir"] = str(base_dir)
+            context = QualityStep().run(context)
+
+        # ── Step 3: Table (optional) ───────────────────────────────────────
         if cfg.datatable_config is not None:
             logger.info("── Step 2: Table — compute")
             context["df"]               = context["rawdata"]

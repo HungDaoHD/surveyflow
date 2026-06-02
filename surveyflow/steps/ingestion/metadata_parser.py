@@ -42,6 +42,250 @@ CODEABLE_TYPES = {"SA", "MA", "ranking"}
 # answer_types excluded from rawdata.csv
 EXCLUDED_ANSWER_TYPES = {"audio", "record", "reward", "instruction", "user-name", "user-phone", "photo"}
 
+def _build_lookup_maps(
+    questions: list[dict],
+) -> tuple[dict[str, str], dict[int, tuple[str, int]], dict[int, tuple[str, str]], set[str]]:
+    """Build lookup maps from the raw definition questions list.
+
+    Returns
+    -------
+    id_to_label : {str(question_id): question_label}
+    answer_id_to_code : {answer_id: (question_label, int_choice_code)}
+        Flat choices (SA/MA/ranking) + matrix column choices.
+    row_answer_id_to_info : {row_answer_id: (question_label, row_code_str)}
+        Matrix row choices — used to decode compound IDs like "799010-5582321".
+    q_ids_with_answer_ids : set[str]
+        Question IDs whose choices carry ``answer_id`` fields.
+        Questions NOT in this set (e.g. area/special types) use direct choice
+        codes in condition rules — no answer_id translation needed.
+    """
+    id_to_label: dict[str, str] = {}
+    answer_id_to_code: dict[int, tuple[str, int]] = {}
+    row_answer_id_to_info: dict[int, tuple[str, str]] = {}
+    q_ids_with_answer_ids: set[str] = set()
+
+    for q in questions:
+        qid   = str(q.get("question_id", ""))
+        label = q.get("label", "")
+        if qid:
+            id_to_label[qid] = label
+
+        ci = q.get("choices_i18n", {})
+        if not isinstance(ci, dict):
+            continue
+
+        # Flat choices (SA / MA / ranking)
+        for code_str, ch_val in ci.items():
+            if isinstance(ch_val, dict) and "answer_id" in ch_val:
+                try:
+                    answer_id_to_code[int(ch_val["answer_id"])] = (label, int(code_str))
+                    q_ids_with_answer_ids.add(qid)
+                except (ValueError, TypeError):
+                    pass
+
+        # Matrix column choices → used to translate column answer_id → code
+        for code_str, ch_val in (ci.get("columns") or {}).items():
+            if isinstance(ch_val, dict) and "answer_id" in ch_val:
+                try:
+                    answer_id_to_code[int(ch_val["answer_id"])] = (label, int(code_str))
+                    q_ids_with_answer_ids.add(qid)
+                except (ValueError, TypeError):
+                    pass
+
+        # Matrix row choices → used to decode compound id "{q_id}-{row_answer_id}"
+        for row_code_str, row_val in (ci.get("rows") or {}).items():
+            if isinstance(row_val, dict) and "answer_id" in row_val:
+                try:
+                    row_answer_id_to_info[int(row_val["answer_id"])] = (label, row_code_str)
+                except (ValueError, TypeError):
+                    pass
+
+    return id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids
+
+
+def _translate_condition_node(
+    node: "dict | list | None",
+    id_to_label: dict[str, str],
+    answer_id_to_code: dict[int, tuple[str, int]],
+    row_answer_id_to_info: dict[int, tuple[str, str]],
+    q_ids_with_answer_ids: "set[str] | None" = None,
+) -> "dict | list | None":
+    """Recursively translate a show_condition / contradiction rule node.
+
+    Supported id formats
+    --------------------
+    ``"799409"``
+        Plain question_id — SA / MA / ranking / NUM.
+        If the question has answer_ids in its choices: translate value → codes.
+        If not (e.g. area/special types): treat value as direct choice code.
+
+    ``"799010-5582321"``
+        Compound id ``"{question_id}-{row_answer_id}"`` — matrix sub-question.
+
+    Raises
+    ------
+    ValueError
+        When a question_id or row_answer_id cannot be resolved,
+        or when answer_id lookup fails for a question that has answer_ids.
+    """
+    if node is None:
+        return None
+
+    if isinstance(node, list):
+        return [
+            _translate_condition_node(
+                r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids
+            )
+            for r in node
+        ]
+
+    if "condition" in node:
+        out: dict = {
+            "condition": node["condition"],
+            "rules": [
+                _translate_condition_node(
+                    r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids
+                )
+                for r in node.get("rules", [])
+            ],
+        }
+        if "ignore_no_data" in node:
+            out["ignore_no_data"] = node["ignore_no_data"]
+        return out
+
+    # ── Leaf rule ──────────────────────────────────────────────────────────
+    q_id_str   = str(node.get("id", ""))
+    operator   = node.get("operator", "")
+    input_type = node.get("input", "select")
+    raw_value  = node.get("value")
+
+    # ── Matrix compound id: "{question_id}-{row_answer_id}" ───────────────
+    if "-" in q_id_str:
+        q_id_part, row_aid_str = q_id_str.split("-", 1)
+        q_label = id_to_label.get(q_id_part)
+        if q_label is None:
+            raise ValueError(
+                f"show_condition/contradiction rule: question_id '{q_id_part}' "
+                "(from compound id '{q_id_str}') not found in survey definition"
+            )
+        row_info = row_answer_id_to_info.get(int(row_aid_str))
+        if row_info is None:
+            raise ValueError(
+                f"row_answer_id {row_aid_str} (compound id '{q_id_str}') "
+                "not found in any matrix rows"
+            )
+        _, row_code = row_info
+        sub_q_label = f"{q_label}_r{row_code}"
+
+        translated: dict = {
+            "question":        sub_q_label,
+            "operator":        _normalize_operator(operator),
+            "ignore_no_data":  node.get("ignore_no_data", 0),
+        }
+        if input_type == "select" and raw_value is not None and not _is_numeric_op(operator) and operator not in _NULL_OPS:
+            # value is a column answer_id (may arrive as string or int or list)
+            if isinstance(raw_value, list):
+                codes = []
+                for aid in raw_value:
+                    info = answer_id_to_code.get(int(aid))
+                    if info is None:
+                        raise ValueError(
+                            f"column answer_id {aid} (matrix '{sub_q_label}') "
+                            "not found in any choice"
+                        )
+                    codes.append(info[1])
+                translated["codes"] = codes
+            else:
+                info = answer_id_to_code.get(int(raw_value))
+                if info is None:
+                    raise ValueError(
+                        f"column answer_id {raw_value} (matrix '{sub_q_label}') "
+                        "not found in any choice"
+                    )
+                translated["codes"] = [info[1]]
+        else:
+            translated["value"] = raw_value
+        return translated
+
+    # ── Plain question_id ─────────────────────────────────────────────────
+    q_label = id_to_label.get(q_id_str)
+    if q_label is None:
+        raise ValueError(
+            f"show_condition/contradiction rule: question_id '{q_id_str}' "
+            "not found in survey definition"
+        )
+
+    translated = {
+        "question":       q_label,
+        "operator":       _normalize_operator(operator),
+        "ignore_no_data": node.get("ignore_no_data", 0),
+    }
+
+    # Questions without answer_ids in their choices (e.g. area/special types)
+    # use direct choice codes in condition rules — no translation needed.
+    _needs_translation = (q_ids_with_answer_ids is None) or (q_id_str in q_ids_with_answer_ids)
+
+    if input_type == "select" and not _is_numeric_op(operator) and operator not in _NULL_OPS:
+        if isinstance(raw_value, list):
+            codes = []
+            for aid in raw_value:
+                vi = int(aid)
+                if _needs_translation:
+                    info = answer_id_to_code.get(vi)
+                    if info is None:
+                        raise ValueError(
+                            f"answer_id {aid} (question '{q_label}') not found in any choice"
+                        )
+                    codes.append(info[1])
+                else:
+                    codes.append(vi)   # direct code
+            translated["codes"] = codes
+        elif raw_value is not None:
+            vi = int(raw_value)
+            if _needs_translation:
+                info = answer_id_to_code.get(vi)
+                if info is None:
+                    raise ValueError(
+                        f"answer_id {raw_value} (question '{q_label}') not found in any choice"
+                    )
+                translated["codes"] = [info[1]]
+            else:
+                translated["codes"] = [vi]   # direct code
+    else:
+        if raw_value is not None:
+            translated["value"] = raw_value
+
+    return translated
+
+
+# ── Operator helpers (used by _translate_condition_node) ──────────────────────
+
+# Operators that indicate "count of answers" comparison — value is a number, not answer_id.
+# QMe uses these even when input="select".
+_NUMBER_ANSWER_PREFIX = "number_answer_"
+
+_NUMBER_ANSWER_MAP: dict[str, str] = {
+    "number_answer_equal":              "count_equal",
+    "number_answer_not_equal":          "count_not_equal",
+    "number_answer_less":               "count_less",
+    "number_answer_less_or_equal":      "count_less_or_equal",
+    "number_answer_greater":            "count_greater",
+    "number_answer_greater_or_equal":   "count_greater_or_equal",
+}
+
+# Null-check operators — value is always null, no code translation needed.
+_NULL_OPS = {"is_null", "is_not_null"}
+
+
+def _is_numeric_op(op: str) -> bool:
+    return op.startswith(_NUMBER_ANSWER_PREFIX)
+
+
+def _normalize_operator(op: str) -> str:
+    """Normalize QMe-specific operators to a standard internal name."""
+    return _NUMBER_ANSWER_MAP.get(op, op)
+
+
 def _detect_other_codes(choices_i18n: dict) -> list[str]:
     """Return choice codes that are "other-specify" inputs (is_other: true)."""
     return [
@@ -115,8 +359,12 @@ def parse_metadata(definition: dict) -> dict:
 
     survey = definition["survey"]
 
+    # ── Build lookup maps for show_condition / contradiction translation ───
+    _all_qs = definition.get("questions", [])
+    _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids = _build_lookup_maps(_all_qs)
+
     questions: dict[str, dict] = {}
-    for q in definition.get("questions", []):
+    for q in _all_qs:
         q_type   = q["type"]
         inp_type = q.get("input_type", 0)
         atype    = _resolve_answer_type(q_type, inp_type, q.get("type_name", ""))
@@ -210,6 +458,22 @@ def parse_metadata(definition: dict) -> dict:
         if sub_questions:
             q_entry["children"]      = list(sub_questions.keys())
             q_entry["sub_questions"] = sub_questions
+
+        # ── show_condition + contradiction_settings (translated) ───────────
+        raw_sc = q.get("show_condition")
+        raw_cs = q.get("contradiction_settings")
+        if raw_sc:
+            q_entry["show_condition"] = _translate_condition_node(
+                raw_sc, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids
+            )
+        if raw_cs:
+            raw_rules = raw_cs.get("rules")
+            q_entry["contradiction_settings"] = {
+                "action": raw_cs.get("action"),
+                "rules":  _translate_condition_node(
+                    raw_rules, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids
+                ) if raw_rules else None,
+            }
 
         questions[key] = q_entry
 

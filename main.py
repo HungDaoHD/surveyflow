@@ -27,8 +27,8 @@ from qme_auth import get_access_token
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-# SURVEY_ID   = 723334             # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
+SURVEY_ID   = 723334             # int  — survey ID từ QMe
+SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
 # SURVEY_ID   = 723306             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
@@ -42,14 +42,18 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723431             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8981 - JOY" # str  — tên thư mục output
 
-SURVEY_ID   = 723309             # int  — survey ID từ QMe
-SURVEY_NAME = "VN8955 - ACV" # str  — tên thư mục output
+# SURVEY_ID   = 723309             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8955 - ACV" # str  — tên thư mục output
 
 
 # Bật/tắt từng bước
-FETCH_MCP   = False   # True  = fetch lại data từ QMe (ghi đè mcp/)
-RUN_INGEST  = True   # True  = chạy lại ingestion (ghi đè data/)
-RUN_TABLE   = True   # True  = chạy table → datatable.xlsx
+FETCH_MCP    = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
+RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
+RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
+RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
+
+# Ngôn ngữ hiển thị label trong datatable.xlsx
+LANG = "vi"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
@@ -134,7 +138,8 @@ def main():
     print(f"  SurveyFlow Runner")
     print(f"  Survey  : {SURVEY_NAME}  (id={SURVEY_ID})")
     print(f"  Mode    : fetch={FETCH_MODE}")
-    print(f"  Steps   : fetch={FETCH_MCP}  ingest={RUN_INGEST}  table={RUN_TABLE}")
+    print(f"  Steps   : fetch={FETCH_MCP}  ingest={RUN_INGEST}  quality={RUN_QUALITY}  table={RUN_TABLE}")
+    print(f"  Lang    : {LANG}")
     print("=" * 60)
 
     # ── Step 1: Fetch ──────────────────────────────────────────────────────────
@@ -166,7 +171,8 @@ def main():
 
     version   = TABLE_VERSION or _next_version(SURVEY_NAME)
     has_table = RUN_TABLE and datatable_cfg.exists()
-    if RUN_TABLE and not datatable_cfg.exists():
+
+    if not has_table:
         print(f"\n[table] datatable.json not found at {datatable_cfg} — skipping table")
 
     cli_argv = ["--output-dir", str(output_dir), "--version", version,
@@ -175,6 +181,9 @@ def main():
         cli_argv += ["--mcp-dir", str(mcp_dir), "--force-ingestion"]
         if FETCH_MODE == "export":
             cli_argv += ["--export-csv", str(mcp_dir / "data_export.csv")]
+    if RUN_QUALITY:
+        cli_argv += ["--run-quality"]
+    cli_argv += ["--lang", LANG]
     if has_table:
         cli_argv += ["--datatable-config", str(datatable_cfg)]
 

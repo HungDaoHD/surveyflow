@@ -54,9 +54,13 @@ class QualityStep(Step):
         # Identify profile-ID column
         pid_col = _PROFILE_ID_COL if _PROFILE_ID_COL in df.columns else df.columns[0]
 
+        # Answer types that are trackable in rawdata (have columns to check)
+        _TRACKABLE_TYPES = {"SA", "MA", "Matrix_SA", "Matrix_MA", "Matrix_NUM", "ranking"}
+
         violations: list[dict] = []
-        n_sc  = 0   # questions with show_condition
-        n_cs  = 0   # questions with contradiction_settings
+        n_sc      = 0   # questions with show_condition
+        n_cs      = 0   # questions with contradiction_settings
+        n_always  = 0   # questions always shown (show_condition = null)
 
         for qid_str, q_meta in questions.items():
             label = q_meta.get("label", qid_str)
@@ -115,6 +119,33 @@ class QualityStep(Step):
                 except Exception as exc:
                     logger.warning("contradiction eval error — %s: %s", label, exc)
 
+            # ── always shown (show_condition = null) — check missing data ──
+            # sc is None means the question is always displayed to respondents.
+            # Flag any respondent who has no answer for a trackable question.
+            if sc is None and q_meta.get("answer_type") in _TRACKABLE_TYPES:
+                raw_cols = q_meta.get("rawdata_columns") or []
+                if not raw_cols:
+                    continue  # no rawdata columns → not trackable, skip
+                n_always += 1
+                try:
+                    has_ans      = has_answer_vec(q_meta, df)
+                    missing_mask = ~has_ans
+                    mandatory    = q_meta.get("mandatory", False)
+                    for pid in df.loc[missing_mask, pid_col]:
+                        violations.append({
+                            "profile_id": str(pid),
+                            "type":       "always_shown_missing",
+                            "question":   label,
+                            "detail":     (
+                                "mandatory question has no answer"
+                                if mandatory
+                                else "optional question has no answer"
+                            ),
+                            "condition_eval": "always shown (no condition)",
+                        })
+                except Exception as exc:
+                    logger.warning("always_shown check error — %s: %s", label, exc)
+
         # ── Assemble report ────────────────────────────────────────────────
         flagged_ids  = {v["profile_id"] for v in violations}
         type_counts  = Counter(v["type"] for v in violations)
@@ -125,11 +156,13 @@ class QualityStep(Step):
             "questions_checked": {
                 "show_condition":         n_sc,
                 "contradiction_settings": n_cs,
+                "always_shown":           n_always,
             },
             "summary": {
                 "flagged_count":          len(flagged_ids),
                 "show_condition_extra":   type_counts.get("show_condition_extra", 0),
                 "show_condition_missing": type_counts.get("show_condition_missing", 0),
+                "always_shown_missing":   type_counts.get("always_shown_missing", 0),
                 "contradiction":          type_counts.get("contradiction", 0),
             },
             "violations": violations,

@@ -27,8 +27,8 @@ from qme_auth import get_access_token
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-SURVEY_ID   = 723334             # int  — survey ID từ QMe
-SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
+# SURVEY_ID   = 723334             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
 # SURVEY_ID   = 723306             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
@@ -44,6 +44,9 @@ SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
 # SURVEY_ID   = 723309             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8955 - ACV" # str  — tên thư mục output
+
+SURVEY_ID   = 723480             # int  — survey ID từ QMe
+SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
 
 # Bật/tắt từng bước

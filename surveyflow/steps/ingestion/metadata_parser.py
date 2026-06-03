@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # answer_type codes (stored in metadata.json)
 _TYPE_LABEL: dict[int, str] = {
     1:    "FT",          # freetext
@@ -170,10 +174,26 @@ def _translate_condition_node(
             )
         row_info = row_answer_id_to_info.get(int(row_aid_str))
         if row_info is None:
-            raise ValueError(
-                f"row_answer_id {row_aid_str} (compound id '{q_id_str}') "
-                "not found in any matrix rows"
+            # Fallback: some QMe surveys encode MA sub-choice conditions as
+            # "{q_id}-{answer_id}" where the second part is a flat choice answer_id
+            # (not a matrix row). Resolve via answer_id_to_code.
+            flat_info = answer_id_to_code.get(int(row_aid_str))
+            if flat_info is not None:
+                _, choice_code = flat_info
+                return {
+                    "question":       q_label,
+                    "operator":       _normalize_operator(operator),
+                    "ignore_no_data": node.get("ignore_no_data", 0),
+                    "codes":          [choice_code],
+                }
+            # Cannot resolve — log and return None so the rule is skipped
+            # (eval_condition_vec treats None as True = no constraint)
+            logger.warning(
+                "show_condition: compound id '%s' — row_answer_id %s not found "
+                "in matrix rows or flat choices; rule will be skipped",
+                q_id_str, row_aid_str,
             )
+            return None
         _, row_code = row_info
         sub_q_label = f"{q_label}_r{row_code}"
 

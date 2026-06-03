@@ -77,6 +77,34 @@ class Pipeline:
             "lang":           cfg.lang,
         }
 
+        # ── Metadata-only mode ────────────────────────────────────────────
+        # Parse definition → save metadata.json immediately, skip rawdata.
+        # Useful for building datatable artifacts before data_export.csv is ready.
+        if cfg.metadata_only:
+            if cfg.definition is None:
+                raise ValueError("definition is required for metadata_only mode")
+            from surveyflow.steps.ingestion.metadata_parser import parse_metadata
+            from surveyflow.utils.io import save_json
+            import json as _json
+            data_dir.mkdir(parents=True, exist_ok=True)
+            metadata      = parse_metadata(cfg.definition)
+            metadata_path = data_dir / "metadata.json"
+            save_json(metadata, metadata_path)
+            logger.info("metadata_only: saved → %s", metadata_path)
+
+            # If rawdata.csv already exists (survey re-run), annotate rawdata_columns
+            # so the metadata remains fully functional for table/quality steps.
+            rawdata_path = data_dir / "rawdata.csv"
+            if rawdata_path.exists():
+                from surveyflow.steps.ingestion.export_parser import annotate_rawdata_columns
+                annotate_rawdata_columns(metadata_path, rawdata_path)
+                metadata = _json.loads(metadata_path.read_text(encoding="utf-8"))
+                logger.info("metadata_only: annotated rawdata_columns from existing rawdata")
+
+            context["metadata"]      = metadata
+            context["metadata_path"] = str(metadata_path)
+            return context
+
         # ── Step 1: Ingestion ──────────────────────────────────────────────
         if not cfg.skip_ingestion:
             if cfg.definition is None:

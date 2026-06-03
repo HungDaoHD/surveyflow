@@ -151,6 +151,13 @@ def main(argv: list[str] | None = None) -> None:
         help="Comma-separated statuses e.g. approved,pending",
     )
     parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="Parse definition.json → save metadata.json only. "
+             "No data_export.csv needed. Use to quickly inspect questions "
+             "before fetching rawdata.",
+    )
+    parser.add_argument(
         "--run-quality",
         action="store_true",
         help="Run quality check step (show_condition + contradiction validation). "
@@ -173,15 +180,27 @@ def main(argv: list[str] | None = None) -> None:
     # ── Load source files when ingestion is needed ─────────────────────────────
     definition, rows_pages, export_df = None, None, None
 
-    if not skip_ingestion:
+    needs_definition = not skip_ingestion or args.metadata_only
+
+    if needs_definition:
         if not args.mcp_dir:
             parser.error(
-                "--mcp-dir is required when ingestion needs to run "
-                f"(data not found at {data_dir} or --force-ingestion was set)"
+                "--mcp-dir is required "
+                + ("for --metadata-only" if args.metadata_only
+                   else f"(data not found at {data_dir} or --force-ingestion was set)")
             )
         mcp_dir = Path(args.mcp_dir)
 
-        if args.export_csv:
+        if args.metadata_only:
+            # metadata-only: only need definition.json, no export CSV
+            def_path = mcp_dir / "definition.json"
+            if not def_path.exists():
+                parser.error(f"definition.json not found in {mcp_dir}")
+            import json as _json
+            with def_path.open(encoding="utf-8") as _f:
+                definition = _json.load(_f)
+            logging.info("Loaded definition from %s", def_path)
+        elif args.export_csv:
             # New mode: definition + data_export.csv
             definition, export_df = _load_mcp_export(mcp_dir, Path(args.export_csv))
         else:
@@ -207,9 +226,13 @@ def main(argv: list[str] | None = None) -> None:
         datatable_config = datatable_config,
         run_quality      = args.run_quality,
         lang             = args.lang,
+        metadata_only    = args.metadata_only,
     )).run()
 
     print("\n--- Output ---")
+    if args.metadata_only:
+        print(f"  metadata : {result['metadata_path']}  (definition-only, no rawdata)")
+        return
     print(f"  rawdata  : {result['rawdata_path']}")
     print(f"  metadata : {result['metadata_path']}")
     if "quality_report_path" in result:

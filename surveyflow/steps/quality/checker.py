@@ -257,3 +257,55 @@ def describe_condition(node: dict) -> str:
     if "codes" in node:
         return f"{q} {op} {node['codes']}"
     return f"{q} {op} {node.get('value')}"
+
+
+def describe_trigger(
+    node: "dict | list | None",
+    df: pd.DataFrame,
+    label_to_q: dict[str, dict],
+) -> str:
+    """Return a compact string describing only the sub-conditions that are True for *df*.
+
+    Designed for single-row DataFrames.  Walks the condition tree and returns
+    only the OR/AND branches that actually evaluated to True, making it easy to
+    see *which* specific rule fired for a given respondent.
+
+    - OR node  → include only the True children
+    - AND node → include all children (all must be True for AND to be True)
+    - Leaf     → delegate to describe_condition
+    """
+    if not node:
+        return ""
+
+    if isinstance(node, list):
+        # Top-level list of rules treated as implicit AND
+        parts: list[str] = []
+        for r in node:
+            try:
+                if eval_condition_vec(r, df, label_to_q).all():
+                    part = describe_trigger(r, df, label_to_q)
+                    if part:
+                        parts.append(part)
+            except Exception:
+                pass
+        return " AND ".join(f"({p})" if " " in p else p for p in parts)
+
+    if "condition" in node:
+        logic = node["condition"].upper()
+        rules = node.get("rules") or []
+        parts = []
+        for r in rules:
+            try:
+                if eval_condition_vec(r, df, label_to_q).all():
+                    part = describe_trigger(r, df, label_to_q)
+                    if part:
+                        parts.append(part)
+            except Exception:
+                pass
+        if not parts:
+            return ""
+        sep = f" {logic} "
+        return sep.join(f"({p})" if " " in p else p for p in parts)
+
+    # Leaf node — always included by caller (they already verified it's True)
+    return describe_condition(node)

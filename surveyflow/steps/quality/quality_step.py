@@ -13,6 +13,7 @@ from surveyflow.core.base import Step
 from surveyflow.steps.quality.checker import (
     build_label_to_q,
     describe_condition,
+    describe_trigger,
     eval_condition_vec,
     has_answer_vec,
 )
@@ -77,24 +78,33 @@ class QualityStep(Step):
 
                     # Extra: answered but show_condition NOT met
                     extra_mask = (~should_see) & has_ans
-                    for pid in df.loc[extra_mask, pid_col]:
+                    for idx in df.index[extra_mask]:
+                        pid = df.at[idx, pid_col]
                         violations.append({
-                            "profile_id":     str(pid),
-                            "type":           "show_condition_extra",
-                            "question":       label,
-                            "detail":         "answered but show_condition not met",
-                            "condition_eval": cond_str,
+                            "profile_id":        str(pid),
+                            "type":              "show_condition_extra",
+                            "question":          label,
+                            "detail":            "answered but show_condition not met",
+                            "condition_eval":    cond_str,
+                            "condition_trigger": "",   # sc=False for this row → no triggered branch
                         })
 
                     # Missing: show_condition met but no answer
                     missing_mask = should_see & (~has_ans)
-                    for pid in df.loc[missing_mask, pid_col]:
+                    for idx in df.index[missing_mask]:
+                        pid     = df.at[idx, pid_col]
+                        row_df  = df.loc[[idx]]
+                        try:
+                            trigger = describe_trigger(sc, row_df, label_to_q)
+                        except Exception:
+                            trigger = ""
                         violations.append({
-                            "profile_id":     str(pid),
-                            "type":           "show_condition_missing",
-                            "question":       label,
-                            "detail":         "show_condition met but no answer recorded",
-                            "condition_eval": cond_str,
+                            "profile_id":        str(pid),
+                            "type":              "show_condition_missing",
+                            "question":          label,
+                            "detail":            "show_condition met but no answer recorded",
+                            "condition_eval":    cond_str,
+                            "condition_trigger": trigger,
                         })
 
                 except Exception as exc:
@@ -107,13 +117,20 @@ class QualityStep(Step):
                     triggered  = eval_condition_vec(cs["rules"], df, label_to_q)
                     cond_str   = describe_condition(cs["rules"])
 
-                    for pid in df.loc[triggered, pid_col]:
+                    for idx in df.index[triggered]:
+                        pid    = df.at[idx, pid_col]
+                        row_df = df.loc[[idx]]
+                        try:
+                            trigger = describe_trigger(cs["rules"], row_df, label_to_q)
+                        except Exception:
+                            trigger = ""
                         violations.append({
-                            "profile_id":     str(pid),
-                            "type":           "contradiction",
-                            "question":       label,
-                            "detail":         "contradiction rule triggered",
-                            "condition_eval": cond_str,
+                            "profile_id":        str(pid),
+                            "type":              "contradiction",
+                            "question":          label,
+                            "detail":            "contradiction rule triggered",
+                            "condition_eval":    cond_str,
+                            "condition_trigger": trigger,
                         })
 
                 except Exception as exc:
@@ -131,17 +148,19 @@ class QualityStep(Step):
                     has_ans      = has_answer_vec(q_meta, df)
                     missing_mask = ~has_ans
                     mandatory    = q_meta.get("mandatory", False)
-                    for pid in df.loc[missing_mask, pid_col]:
+                    for idx in df.index[missing_mask]:
+                        pid = df.at[idx, pid_col]
                         violations.append({
-                            "profile_id": str(pid),
-                            "type":       "always_shown_missing",
-                            "question":   label,
-                            "detail":     (
+                            "profile_id":        str(pid),
+                            "type":              "always_shown_missing",
+                            "question":          label,
+                            "detail":            (
                                 "mandatory question has no answer"
                                 if mandatory
                                 else "optional question has no answer"
                             ),
-                            "condition_eval": "always shown (no condition)",
+                            "condition_eval":    "always shown (no condition)",
+                            "condition_trigger": "",
                         })
                 except Exception as exc:
                     logger.warning("always_shown check error — %s: %s", label, exc)
@@ -175,7 +194,7 @@ class QualityStep(Step):
 
         # ── CSV flat file ──────────────────────────────────────────────────
         csv_path = quality_dir / "flagged_profiles.csv"
-        cols = ["profile_id", "type", "question", "detail", "condition_eval"]
+        cols = ["profile_id", "type", "question", "detail", "condition_eval", "condition_trigger"]
         vdf  = pd.DataFrame(violations, columns=cols) if violations else pd.DataFrame(columns=cols)
         vdf.to_csv(csv_path, index=False, encoding="utf-8-sig")
 

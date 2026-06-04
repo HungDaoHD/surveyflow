@@ -606,3 +606,86 @@ def annotate_rawdata_columns(
         "annotate_rawdata_columns: %d questions annotated, %d had other_choice_codes pruned",
         len(meta["questions"]), pruned_count,
     )
+
+
+def rename_matrix_columns(
+    meta_path: "str | Path",
+    rawdata_path: "str | Path",
+) -> int:
+    """Rename rawdata matrix columns from zero-padded to label format.
+
+    Example: ``A6_08`` → ``A6_r8``,  ``A6_08_o5`` → ``A6_r8_o5``
+
+    Must be called **after** ``annotate_rawdata_columns`` so that
+    ``rawdata_columns`` is already populated in metadata.
+
+    Returns the number of columns renamed.
+    """
+    import pandas as _pd
+
+    meta_path    = pathlib.Path(meta_path)
+    rawdata_path = pathlib.Path(rawdata_path)
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    df   = _pd.read_csv(rawdata_path, dtype=str)
+
+    rename_map: dict[str, str] = {}   # old_col → new_col
+
+    for q in meta.get("questions", {}).values():
+        parent_label = q.get("label", "")
+        sub_qs = q.get("sub_questions") or {}
+        for sq in sub_qs.values():
+            new_label = sq.get("label", "")
+            if not new_label or not parent_label:
+                continue
+
+            # Regular rawdata columns.
+            # Matrix SA: one col per row  → B1_01      → B1_r1
+            # Matrix MA: many cols per row → B1_01_1   → B1_r1_1
+            #                               B1_01_2   → B1_r1_2
+            for old_col in sq.get("rawdata_columns") or []:
+                if old_col not in df.columns:
+                    continue
+                # Strip parent prefix, extract the row-number portion, keep the rest
+                after_parent = old_col[len(parent_label):]          # e.g. "_01_1" or "_01"
+                m = re.match(r"_(\d+)", after_parent)
+                col_suffix   = after_parent[len(m.group(0)):] if m else ""  # e.g. "_1" or ""
+                new_col      = new_label + col_suffix               # e.g. "B1_r1_1" or "B1_r1"
+                if old_col != new_col:
+                    rename_map[old_col] = new_col
+
+            # Other-text columns (e.g. B1_01_o5 → B1_r1_o5)
+            for old_col in sq.get("rawdata_other_columns") or []:
+                if old_col not in df.columns:
+                    continue
+                after_parent = old_col[len(parent_label):]
+                m = re.match(r"_(\d+)", after_parent)
+                col_suffix   = after_parent[len(m.group(0)):] if m else ""
+                new_col      = new_label + col_suffix
+                if old_col != new_col:
+                    rename_map[old_col] = new_col
+
+    if not rename_map:
+        logger.info("rename_matrix_columns: nothing to rename")
+        return 0
+
+    df = df.rename(columns=rename_map)
+    df.to_csv(rawdata_path, index=False, encoding="utf-8-sig")
+
+    # Update rawdata_columns / rawdata_other_columns in metadata
+    for q in meta.get("questions", {}).values():
+        sub_qs = q.get("sub_questions") or {}
+        for sq in sub_qs.values():
+            sq["rawdata_columns"] = [
+                rename_map.get(c, c) for c in (sq.get("rawdata_columns") or [])
+            ]
+            if sq.get("rawdata_other_columns"):
+                sq["rawdata_other_columns"] = [
+                    rename_map.get(c, c) for c in sq["rawdata_other_columns"]
+                ]
+
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("rename_matrix_columns: renamed %d column(s)", len(rename_map))
+    return len(rename_map)

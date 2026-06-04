@@ -57,6 +57,7 @@ class IngestionStep(Step):
             convert_export_to_rawdata,
             patch_metadata,
             recode_area_questions,
+            rename_matrix_columns,
         )
 
         import pandas as _pd
@@ -100,6 +101,7 @@ class IngestionStep(Step):
         logger.info("Saved → %s", rawdata_path)
 
         annotate_rawdata_columns(metadata_path, rawdata_path)
+        rename_matrix_columns(metadata_path, rawdata_path)
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         logger.info("Saved → %s", metadata_path)
 

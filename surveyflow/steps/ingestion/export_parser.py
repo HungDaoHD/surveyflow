@@ -674,6 +674,15 @@ def rename_matrix_columns(
 
     # Update rawdata_columns / rawdata_other_columns in metadata
     for q in meta.get("questions", {}).values():
+        # Parent-level columns (used by validate_data_integrity)
+        q["rawdata_columns"] = [
+            rename_map.get(c, c) for c in (q.get("rawdata_columns") or [])
+        ]
+        if q.get("rawdata_other_columns"):
+            q["rawdata_other_columns"] = [
+                rename_map.get(c, c) for c in q["rawdata_other_columns"]
+            ]
+        # Sub-question level columns
         sub_qs = q.get("sub_questions") or {}
         for sq in sub_qs.values():
             sq["rawdata_columns"] = [

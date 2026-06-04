@@ -158,6 +158,14 @@ def _eval_select(
         ]
         if not present_masks:
             return pd.Series(False, index=df.index)
+
+        if operator == "equal_and":
+            # ALL codes must be selected simultaneously
+            all_present = present_masks[0]
+            for m in present_masks[1:]:
+                all_present = all_present & m
+            return all_present
+
         any_present = present_masks[0]
         for m in present_masks[1:]:
             any_present = any_present | m

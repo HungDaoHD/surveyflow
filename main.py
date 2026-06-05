@@ -48,13 +48,16 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-SURVEY_ID   = 723450             # int  — survey ID từ QMe
-SURVEY_NAME = "VN8964" # str  — tên thư mục output
+# SURVEY_ID   = 723450             # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8964" # str  — tên thư mục output
+
+SURVEY_ID   = 723442               # int  — survey ID từ QMe
+SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
 
 
 
 # Bật/tắt từng bước
-FETCH_MCP    = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
+FETCH_MCP    = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
 RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx

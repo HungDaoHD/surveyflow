@@ -76,20 +76,20 @@ class QualityStep(Step):
                     has_ans    = has_answer_vec(q_meta, df)
                     cond_str   = describe_condition(sc)
 
-                    # Extra: answered but show_condition NOT met
+                    # Extraneous: answered but show_condition NOT met
                     extra_mask = (~should_see) & has_ans
                     for idx in df.index[extra_mask]:
                         pid = df.at[idx, pid_col]
                         violations.append({
                             "profile_id":        str(pid),
-                            "type":              "show_condition_extra",
+                            "type":              "extraneous",
                             "question":          label,
                             "detail":            "answered but show_condition not met",
                             "condition_eval":    cond_str,
-                            "condition_trigger": "",   # sc=False for this row → no triggered branch
+                            "condition_trigger": "",
                         })
 
-                    # Missing: show_condition met but no answer
+                    # Routed missing: show_condition met but no answer
                     missing_mask = should_see & (~has_ans)
                     for idx in df.index[missing_mask]:
                         pid     = df.at[idx, pid_col]
@@ -100,7 +100,7 @@ class QualityStep(Step):
                             trigger = ""
                         violations.append({
                             "profile_id":        str(pid),
-                            "type":              "show_condition_missing",
+                            "type":              "routed_missing",
                             "question":          label,
                             "detail":            "show_condition met but no answer recorded",
                             "condition_eval":    cond_str,
@@ -152,7 +152,7 @@ class QualityStep(Step):
                         pid = df.at[idx, pid_col]
                         violations.append({
                             "profile_id":        str(pid),
-                            "type":              "always_shown_missing",
+                            "type":              "missing",
                             "question":          label,
                             "detail":            (
                                 "mandatory question has no answer"
@@ -178,11 +178,11 @@ class QualityStep(Step):
                 "always_shown":           n_always,
             },
             "summary": {
-                "flagged_count":          len(flagged_ids),
-                "show_condition_extra":   type_counts.get("show_condition_extra", 0),
-                "show_condition_missing": type_counts.get("show_condition_missing", 0),
-                "always_shown_missing":   type_counts.get("always_shown_missing", 0),
-                "contradiction":          type_counts.get("contradiction", 0),
+                "flagged_count":  len(flagged_ids),
+                "missing":        type_counts.get("missing", 0),
+                "routed_missing": type_counts.get("routed_missing", 0),
+                "extraneous":     type_counts.get("extraneous", 0),
+                "contradiction":  type_counts.get("contradiction", 0),
             },
             "violations": violations,
         }

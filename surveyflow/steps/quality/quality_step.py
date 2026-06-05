@@ -84,7 +84,7 @@ class QualityStep(Step):
                             "profile_id":        str(pid),
                             "type":              "extraneous",
                             "question":          label,
-                            "detail":            "answered but show_condition not met",
+                            "detail":            "answered but condition not met",
                             "condition_eval":    cond_str,
                             "condition_trigger": "",
                         })
@@ -102,7 +102,7 @@ class QualityStep(Step):
                             "profile_id":        str(pid),
                             "type":              "routed_missing",
                             "question":          label,
-                            "detail":            "show_condition met but no answer recorded",
+                            "detail":            "condition met but no answer recorded",
                             "condition_eval":    cond_str,
                             "condition_trigger": trigger,
                         })

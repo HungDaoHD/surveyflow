@@ -240,8 +240,9 @@ def main(argv: list[str] | None = None) -> None:
         s   = rpt.get("summary", {})
         print(f"  quality  : {result['quality_report_path']}")
         print(f"             flagged={s.get('flagged_count',0)}  "
-              f"extra={s.get('show_condition_extra',0)}  "
-              f"missing={s.get('show_condition_missing',0)}  "
+              f"missing={s.get('missing',0)}  "
+              f"routed_missing={s.get('routed_missing',0)}  "
+              f"extraneous={s.get('extraneous',0)}  "
               f"contradiction={s.get('contradiction',0)}")
     if "datatable_path" in result:
         print(f"  datatable: {result['datatable_path']}")

@@ -305,17 +305,137 @@ def enrich_metadata_values(
 
 # ── encode_records ────────────────────────────────────────────────────────────
 
-# ── normalised city aliases for area recoding ─────────────────────────────────
+# ── normalised city/province aliases for area recoding (QMe code list) ────────
 _AREA_ALIASES: dict[str, int] = {
-    # Hồ Chí Minh
-    "hồ chí minh": 1, "ho chi minh": 1, "tp.hcm": 1, "tp hcm": 1,
-    "hcm": 1, "tphcm": 1, "sài gòn": 1, "sai gon": 1,
-    # Hà Nội
-    "hà nội": 2, "ha noi": 2, "hn": 2, "hanoi": 2,
-    # Đà Nẵng
-    "đà nẵng": 3, "da nang": 3, "dn": 3, "danang": 3,
-    # Cần Thơ
-    "cần thơ": 4, "can tho": 4, "ct": 4, "cantho": 4,
+    # 10 — Cần Thơ
+    "cần thơ": 10, "can tho": 10, "cantho": 10,
+    # 11 — Hồ Chí Minh
+    "hồ chí minh": 11, "ho chi minh": 11, "tp.hcm": 11, "tp hcm": 11,
+    "hcm": 11, "tphcm": 11, "sài gòn": 11, "sai gon": 11,
+    # 12 — Hà Nội
+    "hà nội": 12, "ha noi": 12, "hn": 12, "hanoi": 12,
+    # 13 — Hải Phòng
+    "hải phòng": 13, "hai phong": 13, "haiphong": 13, "hp": 13,
+    # 14 — Đà Nẵng
+    "đà nẵng": 14, "da nang": 14, "danang": 14, "dn": 14,
+    # 15 — Đồng Nai
+    "đồng nai": 15, "dong nai": 15, "dongnai": 15,
+    # 16 — Bình Dương
+    "bình dương": 16, "binh duong": 16, "binhduong": 16,
+    # 17 — Long An
+    "long an": 17, "longan": 17,
+    # 18 — An Giang
+    "an giang": 18, "angiang": 18,
+    # 19 — Bà Rịa - Vũng Tàu
+    "bà rịa - vũng tàu": 19, "ba ria - vung tau": 19, "bà rịa vũng tàu": 19,
+    "ba ria vung tau": 19, "vũng tàu": 19, "vung tau": 19, "brvt": 19,
+    # 20 — Bắc Giang
+    "bắc giang": 20, "bac giang": 20, "bacgiang": 20,
+    # 21 — Bắc Kạn
+    "bắc kạn": 21, "bac kan": 21, "backan": 21,
+    # 22 — Bạc Liêu
+    "bạc liêu": 22, "bac lieu": 22, "baclieu": 22,
+    # 23 — Bắc Ninh
+    "bắc ninh": 23, "bac ninh": 23, "bacninh": 23,
+    # 24 — Bến Tre
+    "bến tre": 24, "ben tre": 24, "bentre": 24,
+    # 25 — Bình Định
+    "bình định": 25, "binh dinh": 25, "binhdinh": 25,
+    # 26 — Bình Phước
+    "bình phước": 26, "binh phuoc": 26, "binhphuoc": 26,
+    # 27 — Bình Thuận
+    "bình thuận": 27, "binh thuan": 27, "binhthuan": 27,
+    # 28 — Cà Mau
+    "cà mau": 28, "ca mau": 28, "camau": 28,
+    # 29 — Cao Bằng
+    "cao bằng": 29, "cao bang": 29, "caobang": 29,
+    # 30 — Đắk Lắk
+    "đắk lắk": 30, "dak lak": 30, "daklak": 30, "đắc lắc": 30, "dac lac": 30,
+    # 31 — Đắk Nông
+    "đắk nông": 31, "dak nong": 31, "daknong": 31,
+    # 32 — Điện Biên
+    "điện biên": 32, "dien bien": 32, "dientbien": 32,
+    # 33 — Đồng Tháp
+    "đồng tháp": 33, "dong thap": 33, "dongthap": 33,
+    # 34 — Gia Lai
+    "gia lai": 34, "gialai": 34,
+    # 35 — Hà Nam
+    "hà nam": 35, "ha nam": 35, "hanam": 35,
+    # 36 — Hà Giang
+    "hà giang": 36, "ha giang": 36, "hagiang": 36,
+    # 37 — Hà Tĩnh
+    "hà tĩnh": 37, "ha tinh": 37, "hatinh": 37,
+    # 38 — Hải Dương
+    "hải dương": 38, "hai duong": 38, "haiduong": 38,
+    # 39 — Hậu Giang
+    "hậu giang": 39, "hau giang": 39, "haugiang": 39,
+    # 40 — Hòa Bình
+    "hòa bình": 40, "hoa binh": 40, "hoabinh": 40,
+    # 41 — Hưng Yên
+    "hưng yên": 41, "hung yen": 41, "hungyen": 41,
+    # 42 — Khánh Hòa
+    "khánh hòa": 42, "khanh hoa": 42, "khanhhoa": 42, "nha trang": 42,
+    # 43 — Kiên Giang
+    "kiên giang": 43, "kien giang": 43, "kiengiang": 43, "phú quốc": 43,
+    # 44 — Kon Tum
+    "kon tum": 44, "kontum": 44,
+    # 45 — Lai Châu
+    "lai châu": 45, "lai chau": 45, "laichau": 45,
+    # 46 — Lâm Đồng
+    "lâm đồng": 46, "lam dong": 46, "lamdong": 46, "đà lạt": 46, "da lat": 46,
+    # 47 — Lạng Sơn
+    "lạng sơn": 47, "lang son": 47, "langson": 47,
+    # 48 — Lào Cai
+    "lào cai": 48, "lao cai": 48, "laocai": 48, "sa pa": 48, "sapa": 48,
+    # 49 — Nam Định
+    "nam định": 49, "nam dinh": 49, "namdinh": 49,
+    # 50 — Nghệ An
+    "nghệ an": 50, "nghe an": 50, "nghean": 50,
+    # 51 — Ninh Bình
+    "ninh bình": 51, "ninh binh": 51, "ninhbinh": 51,
+    # 52 — Ninh Thuận
+    "ninh thuận": 52, "ninh thuan": 52, "ninhthuan": 52,
+    # 53 — Phú Thọ
+    "phú thọ": 53, "phu tho": 53, "phutho": 53,
+    # 54 — Phú Yên
+    "phú yên": 54, "phu yen": 54, "phuyen": 54,
+    # 55 — Quảng Bình
+    "quảng bình": 55, "quang binh": 55, "quangbinh": 55,
+    # 56 — Quảng Nam
+    "quảng nam": 56, "quang nam": 56, "quangnam": 56, "hội an": 56,
+    # 57 — Quảng Ninh
+    "quảng ninh": 57, "quang ninh": 57, "quangninh": 57, "hạ long": 57, "ha long": 57,
+    # 58 — Quảng Trị
+    "quảng trị": 58, "quang tri": 58, "quangtri": 58,
+    # 59 — Sóc Trăng
+    "sóc trăng": 59, "soc trang": 59, "soctrang": 59,
+    # 60 — Sơn La
+    "sơn la": 60, "son la": 60, "sonla": 60,
+    # 61 — Tây Ninh
+    "tây ninh": 61, "tay ninh": 61, "tayninh": 61,
+    # 62 — Thái Bình
+    "thái bình": 62, "thai binh": 62, "thaibinh": 62,
+    # 63 — Thái Nguyên
+    "thái nguyên": 63, "thai nguyen": 63, "thainguyen": 63,
+    # 64 — Thanh Hóa
+    "thanh hóa": 64, "thanh hoa": 64, "thanhhoa": 64,
+    # 65 — Tiền Giang
+    "tiền giang": 65, "tien giang": 65, "tiengiang": 65,
+    # 66 — Trà Vinh
+    "trà vinh": 66, "tra vinh": 66, "travinh": 66,
+    # 67 — Tuyên Quang
+    "tuyên quang": 67, "tuyen quang": 67, "tuyenquang": 67,
+    # 68 — Vĩnh Long
+    "vĩnh long": 68, "vinh long": 68, "vinhlong": 68,
+    # 69 — Vĩnh Phúc
+    "vĩnh phúc": 69, "vinh phuc": 69, "vinhphuc": 69,
+    # 70 — Yên Bái
+    "yên bái": 70, "yen bai": 70, "yenbai": 70,
+    # 71 — Quảng Ngãi
+    "quảng ngãi": 71, "quang ngai": 71, "quangngai": 71,
+    # 2109 — Thừa Thiên - Huế
+    "thừa thiên - huế": 2109, "thua thien - hue": 2109,
+    "thừa thiên huế": 2109, "thua thien hue": 2109, "huế": 2109, "hue": 2109,
 }
 
 _GENDER_RECODE: dict[str, int] = {
@@ -372,7 +492,8 @@ def encode_records(
 
     SA  (singlechoice)      → int            (API already returns integer code)
     SA  gender              → int  1/2       (text → code via _GENDER_RECODE)
-    SA  area                → int  1-4+      (text → code; new cities auto-assigned 5+)
+    SA  area                → int  10-71/2109  (text → QMe province code via _AREA_ALIASES;
+                                               unknown provinces are logged and skipped)
     SA  personal-income     → int  1-12/99   (text matched against choices_i18n)
     MA  (multiplechoice)    → "1;3;5"        (API already returns code string)
     ranking                 → "2;1;3"        (same)
@@ -397,9 +518,9 @@ def encode_records(
             if val:
                 seen.add(val)
 
-        # Build code map: known aliases first, then auto-assign 5+
+        # Build code map from QMe 63-province alias table.
+        # Unknown province names are logged and skipped (63 provinces cover all cases).
         code_map: dict[str, int] = {}   # text_lower → int code
-        next_code = 5
         choices: dict[str, dict] = _copy.deepcopy(AREA_BASE_CHOICES)
 
         for text in sorted(seen):
@@ -409,9 +530,10 @@ def encode_records(
             if tl in _AREA_ALIASES:
                 code_map[tl] = _AREA_ALIASES[tl]
             else:
-                code_map[tl] = next_code
-                choices[str(next_code)] = {"vi": text, "en": text}
-                next_code += 1
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "[area recode] unknown province '%s' — skipped", text
+                )
 
         # Persist discovered choices back into metadata (for metadata.json output)
         q["choices_i18n"] = choices

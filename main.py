@@ -27,32 +27,36 @@ from qme_auth import get_access_token
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-# SURVEY_ID   = 723334             # int  — survey ID từ QMe
+# SURVEY_ID   = 723334              # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
-# SURVEY_ID   = 723306             # int  — survey ID từ QMe
+# SURVEY_ID   = 723306                     # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
 
-# SURVEY_ID   = 723394             # int  — survey ID từ QMe
+# SURVEY_ID   = 723394                    # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8928 - Transino - BHC" # str  — tên thư mục output
 
 # SURVEY_ID   = 723368             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8956 - SME HSR" # str  — tên thư mục output
 
-# SURVEY_ID   = 723431             # int  — survey ID từ QMe
+# SURVEY_ID   = 723431         # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8981 - JOY" # str  — tên thư mục output
 
-# SURVEY_ID   = 723309             # int  — survey ID từ QMe
+# SURVEY_ID   = 723309         # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8955 - ACV" # str  — tên thư mục output
 
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-# SURVEY_ID   = 723450             # int  — survey ID từ QMe
+# SURVEY_ID   = 723450   # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
 SURVEY_ID   = 723442               # int  — survey ID từ QMe
 SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
+
+# SURVEY_ID   = 716642                  # int  — survey ID từ QMe
+# SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output
+
 
 
 
@@ -60,7 +64,7 @@ SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
 FETCH_MCP    = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
 RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
-RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
+RUN_TABLE    = False   # True  = chạy table → datatable.xlsx
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
 LANG = "vi"           # "vi" = Tiếng Việt | "en" = English

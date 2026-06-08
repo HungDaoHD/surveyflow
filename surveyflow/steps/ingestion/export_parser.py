@@ -27,18 +27,9 @@ PERSONAL_COLS: set[str] = {
     "phone",
 }
 
-# ── Area-recode constants ────────────────────────────────────────────────────
-
-_AREA_ANCHOR: dict[str, int] = {
-    "Hồ Chí Minh": 1, "Ho Chi Minh": 1, "Ho Chi Minh City": 1,
-    "TP.HCM": 1, "TP Hồ Chí Minh": 1, "Thành phố Hồ Chí Minh": 1, "TPHCM": 1,
-    "Hà Nội": 2, "Ha Noi": 2, "Hanoi": 2,
-}
-
-_AREA_CANONICAL: dict[int, dict] = {
-    1: {"vi": "Hồ Chí Minh", "en": "Ho Chi Minh City"},
-    2: {"vi": "Hà Nội",      "en": "Hanoi"},
-}
+# ── Area-recode constants (QMe 63-province code list) ────────────────────────
+# Imported lazily to avoid circular imports; used in recode_area_questions().
+# Source of truth: metadata_parser.AREA_BASE_CHOICES + data_parser._AREA_ALIASES
 
 # ── Column-classification helpers ────────────────────────────────────────────
 
@@ -433,13 +424,18 @@ def recode_area_questions(
     """In-place recode ``synthetic_type='area'`` columns; update ``choices_i18n``.
 
     Rules:
-    - Only cities present in data are assigned codes.
-    - If HCM variant found → code 1; if HN variant found → code 2.
-    - Codes 1 and 2 are always reserved (other cities can never get them).
-    - Other cities → next available code ≥ 3 (auto-assigned).
-    - Values already numeric → kept as-is; their label is registered if unknown.
+    - Text values are matched (case-insensitive) against _AREA_ALIASES (QMe 63-province list).
+    - Known provinces → their QMe code (10–71, 2109).
+    - Unknown text → auto-assigned code ≥ 9000.
+    - Values already numeric → kept as-is.
+    - All 63 base provinces are always included in choices_i18n (from AREA_BASE_CHOICES).
     Writes updated metadata to *meta_path*.
     """
+    # Lazy imports to avoid circular dependency
+    from surveyflow.steps.ingestion.data_parser import _AREA_ALIASES
+    from surveyflow.steps.ingestion.metadata_parser import AREA_BASE_CHOICES
+    import copy as _copy
+
     changed = False
 
     for q in meta.get("questions", {}).values():
@@ -449,41 +445,29 @@ def recode_area_questions(
         if lbl not in df.columns:
             continue
 
-        used_codes: set[int] = {1, 2}   # always reserved for HCM / HN
-        new_choices: dict    = {}
-        recode_map:  dict    = {}
+        new_choices: dict = _copy.deepcopy(AREA_BASE_CHOICES)
+        recode_map:  dict = {}
 
         for val in df[lbl].dropna().unique():
             val_str = str(val).strip()
 
-            # Already a numeric code → keep, register label if new
+            # Already a numeric code → keep as-is
             try:
                 code = int(float(val_str))
                 recode_map[val] = code
                 if str(code) not in new_choices:
-                    new_choices[str(code)] = _AREA_CANONICAL.get(
-                        code, {"vi": val_str, "en": val_str}
-                    )
-                used_codes.add(code)
+                    new_choices[str(code)] = {"vi": val_str, "en": val_str}
                 continue
             except (ValueError, TypeError):
                 pass
 
-            # Text → fixed anchor or auto-assign ≥ 3
-            if val_str in _AREA_ANCHOR:
-                code = _AREA_ANCHOR[val_str]
+            # Text → lookup in alias table (case-insensitive)
+            tl = val_str.lower()
+            if tl in _AREA_ALIASES:
+                code = _AREA_ALIASES[tl]
+                recode_map[val] = code
             else:
-                candidate = 3
-                while candidate in used_codes:
-                    candidate += 1
-                code = candidate
-                logger.info("  [area recode] %s: '%s' → code %d", lbl, val_str, code)
-
-            used_codes.add(code)
-            recode_map[val] = code
-            new_choices[str(code)] = _AREA_CANONICAL.get(
-                code, {"vi": val_str, "en": val_str}
-            )
+                logger.warning("  [area recode] %s: unknown province '%s' — skipped", lbl, val_str)
 
         if recode_map:
             df[lbl] = df[lbl].map(recode_map)

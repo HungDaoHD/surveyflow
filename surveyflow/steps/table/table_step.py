@@ -54,7 +54,7 @@ def _brd(thick_left: bool = False, thick_bottom: bool = False) -> Border:
 
 _BORDER = _brd()   # plain thin border (backwards-compat alias)
 
-_STAT_TYPES = {"t2b", "b2b", "mean", "std", "se"}
+_STAT_TYPES = {"t2b", "b2b", "mean", "std", "se", "nps"}
 
 # ── Cell helpers ───────────────────────────────────────────────────────────────
 
@@ -328,8 +328,7 @@ def _write_sheet(
             is_last_row = row_idx == n_data - 1
 
             _row_fill = (
-                _F_STAT      if is_stat  else
-                _F_GROUP_ROW if is_group else
+                _F_STAT if is_stat else
                 None
             )
             _lbl_font = (
@@ -370,7 +369,7 @@ def _write_sheet(
                         _set(ws, r, col, border=_brd(False, thick_bottom=is_last_row))
                     continue
 
-                _computed_stat = stub_row.row_type in ("mean", "std", "se")
+                _computed_stat = stub_row.row_type in ("mean", "std", "se", "nps")
                 raw = (
                     stub_row.values.get(bc_idx)
                     if (cell_content != "count" or _computed_stat)

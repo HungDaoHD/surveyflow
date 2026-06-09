@@ -22,6 +22,7 @@ STAT_LABELS: dict[str, str] = {
     "base": "Base",
     "t2b":  "T2B",
     "b2b":  "B2B",
+    "nps":  "NPS",
     "mean": "Mean",
     "std":  "Std",
     "se":   "Standard Error",
@@ -29,9 +30,115 @@ STAT_LABELS: dict[str, str] = {
     "max":  "Max",
 }
 
-DEFAULT_STATS_ORDER = ["base", "percent", "t2b", "b2b", "mean", "std", "se", "min", "max"]
+DEFAULT_STATS_ORDER = ["base", "percent", "t2b", "b2b", "nps", "mean", "std", "se", "min", "max"]
 
 NUMERIC_TYPES = {"SA", "NUM", "multiplenumber"}
+
+
+def _is_unified_choices(choices_cfg: list[dict]) -> bool:
+    """Return True when the 'choices' array contains at least one group entry
+    (identified by the presence of a ``"codes"`` key with a list value).
+
+    When True the renderer iterates the array in order, treating entries with
+    ``"codes"`` as group summaries and entries with ``"code"`` as individual
+    rows.  When False the legacy ``groups`` + individual-``choices`` paths are used.
+    """
+    return any("codes" in e and isinstance(e.get("codes"), list) for e in choices_cfg)
+
+
+def _extract_factors_from_choices(choices_cfg: list[dict]) -> dict[str, float]:
+    """Build a factor map {code_str: factor} from per-choice ``"factor"`` fields.
+
+    Returns an empty dict when no choices carry a ``"factor"`` key (caller
+    should fall back to the legacy top-level ``"factors"`` / ``"mean_factor"``
+    dict).
+    """
+    return {
+        str(e["code"]): float(e["factor"])
+        for e in choices_cfg
+        if "code" in e and "factor" in e
+    }
+
+
+def _render_unified_choices_rows(
+    choices_cfg: list[dict],
+    sorted_codes: list[str],
+    avail_codes: "set[str]",
+    pct_row_fn: "Any",
+    grp_row_fn: "Any",
+) -> "list[StubRow]":
+    """Render percent rows for a unified choices config.
+
+    Rules:
+    1. ALL individual codes from ``sorted_codes`` are shown first, in sorted
+       order — EXCEPT those marked ``"hidden": true`` via a ``"code"`` entry.
+    2. Group entries (``"codes"`` plural) appear after all individual codes,
+       in the order they are listed in ``choices_cfg``.
+       - ``"type": "netted"`` → group summary row + sub-codes indented below.
+       - Any other type (default ``"combine"``) → group summary row only.
+    3. ``"code"`` (singular) entries carry metadata only (``factor``, ``hidden``);
+       they do NOT change the display position of individual codes.
+    """
+    hidden_codes: set[str] = {
+        str(e["code"]) for e in choices_cfg
+        if "code" in e and e.get("hidden", False)
+    }
+
+    result: list[StubRow] = []
+
+    # 1. All individual codes in sorted order, skip hidden
+    for code in sorted_codes:
+        if code not in hidden_codes:
+            result.append(pct_row_fn(code))
+
+    # 2. Group entries in choices_cfg order
+    for entry in choices_cfg:
+        if "codes" not in entry:
+            continue
+        if entry.get("hidden", False):
+            continue
+        gc = [str(c) for c in entry.get("codes", []) if str(c) in avail_codes]
+        if not gc:
+            continue
+        result.append(grp_row_fn(gc, entry["label"]))
+        if entry.get("type", "combine") == "netted":
+            for c in gc:
+                result.append(pct_row_fn(c))
+
+    return result
+
+
+def _resolve_display_codes(all_codes: list[str], sc_choices: list[dict]) -> list[str]:
+    """Return codes in display order, with hidden codes excluded.
+
+    Parameters
+    ----------
+    all_codes
+        All available code strings, pre-sorted in default display order.
+    sc_choices
+        Optional list of ``{"code": int | str, "hidden"?: bool}`` from the stub
+        config's ``"choices"`` key.  When empty / absent → return *all_codes*
+        unchanged (default sort, all visible).
+
+    Codes listed in *sc_choices* are placed first (in listed order); codes not
+    mentioned are appended at the end in their original default order.
+    Hidden codes (``"hidden": true``) are excluded from the result entirely.
+    """
+    if not sc_choices:
+        return list(all_codes)
+    code_set = set(all_codes)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for entry in sc_choices:
+        code = str(entry.get("code", ""))
+        if code not in code_set:
+            continue
+        seen.add(code)
+        if not entry.get("hidden", False):
+            ordered.append(code)
+    # Append codes not mentioned in sc_choices (at end, in default order)
+    ordered += [c for c in all_codes if c not in seen]
+    return ordered
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -663,6 +770,7 @@ def _compute_row_group(
                 or q
             )
             req_stats = item.get("stats", ["base", "percent"])
+            rg_groups = [g for g in item.get("groups", []) if not g.get("hidden", False)]
 
             sub_bases: dict[int, int] = {
                 i: (_base_count_ma(sub_dfs[i], sub_raw_cols) if is_sub_ma
@@ -681,28 +789,47 @@ def _compute_row_group(
                         values={i: float(v) for i, v in sub_bases.items()},
                     ))
                 elif stat == "percent" and col_choices:
+                    _choices_cfg_rg = item.get("choices", [])
                     _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
                     if is_sub_ma:
                         _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(nb)]
                     else:
                         _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(nb)]
-                    # SA: pre-compute sig for all codes at once (vectorized)
                     _sa_sigs = (
                         {} if is_sub_ma
                         else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
                     )
-                    for code in _scodes:
-                        cnts: dict[int, int]   = {i: _batch[i][code] for i in range(nb)}
-                        pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(nb)}
+
+                    def _rg_pct_row(code: str) -> StubRow:
+                        cnts_: dict[int, int]   = {i: _batch[i].get(code, 0) for i in range(nb)}
+                        pcts_: dict[int, float] = {i: cnts_[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(nb)}
                         if is_sub_ma:
                             _bin = _ma_col_map(sub_raw_cols).get(code)
-                            sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                            sig_ = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
                         else:
-                            sig = _sa_sigs.get(code, {})
-                        sub_rows.append(StubRow(
-                            label=_choice_label(col_choices, code, lang), row_type="percent",
-                            counts=cnts, values=pcts, sig_marks=sig, code=code,
+                            sig_ = _sa_sigs.get(code, {})
+                        return StubRow(label=_choice_label(col_choices, code, lang), row_type="percent", counts=cnts_, values=pcts_, sig_marks=sig_, code=code)
+
+                    def _rg_grp_row(grp_codes: list[str], label: str) -> StubRow:
+                        g_cnts: dict[int, int]   = {i: sum(_batch[i].get(c, 0) for c in grp_codes) for i in range(nb)}
+                        g_pcts: dict[int, float] = {i: g_cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(nb)}
+                        return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+
+                    if _is_unified_choices(_choices_cfg_rg):
+                        sub_rows.extend(_render_unified_choices_rows(
+                            _choices_cfg_rg, _scodes, set(col_choices),
+                            _rg_pct_row, _rg_grp_row,
                         ))
+                    else:
+                        # Legacy: rg_groups first, then display_codes
+                        _display_codes = _resolve_display_codes(_scodes, _choices_cfg_rg)
+                        for grp in rg_groups:
+                            grp_codes = [str(c) for c in grp.get("codes", []) if str(c) in col_choices]
+                            if not grp_codes: continue
+                            sub_rows.append(_rg_grp_row(grp_codes, grp["label"]))
+                            if grp.get("type", "combine") == "netted":
+                                for code in grp_codes: sub_rows.append(_rg_pct_row(code))
+                        for code in _display_codes: sub_rows.append(_rg_pct_row(code))
 
             if sub_rows:
                 sub_blocks.append(StubBlock(
@@ -915,6 +1042,7 @@ def compute_table(
                     else _base_count(sub_dfs[i], sub_col))
                 for i in range(n)
             }
+            _sub_ref_groups = [g for g in sc.get("groups", []) if not g.get("hidden", False)]
             sub_rows: list[StubRow] = []
             for stat in DEFAULT_STATS_ORDER:
                 if stat not in req_stats:
@@ -926,28 +1054,47 @@ def compute_table(
                         values={i: float(v) for i, v in sub_bases.items()},
                     ))
                 elif stat == "percent" and col_choices:
+                    _choices_cfg_sr = sc.get("choices", [])
                     _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
                     if is_sub_ma:
                         _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
                     else:
                         _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
-                    # SA: pre-compute sig for all codes at once (vectorized)
                     _sa_sigs = (
                         {} if is_sub_ma
                         else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
                     )
-                    for code in _scodes:
-                        cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
-                        pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+
+                    def _sr_pct_row(code: str) -> StubRow:
+                        cnts_: dict[int, int]   = {i: _batch[i].get(code, 0) for i in range(n)}
+                        pcts_: dict[int, float] = {i: cnts_[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
                         if is_sub_ma:
                             _bin = _ma_col_map(sub_raw_cols).get(code)
-                            sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                            sig_ = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
                         else:
-                            sig = _sa_sigs.get(code, {})
-                        sub_rows.append(StubRow(
-                            label=_clabel(col_choices, code), row_type="percent",
-                            counts=cnts, values=pcts, sig_marks=sig, code=code,
+                            sig_ = _sa_sigs.get(code, {})
+                        return StubRow(label=_clabel(col_choices, code), row_type="percent", counts=cnts_, values=pcts_, sig_marks=sig_, code=code)
+
+                    def _sr_grp_row(grp_codes: list[str], label: str) -> StubRow:
+                        g_cnts: dict[int, int]   = {i: sum(_batch[i].get(c, 0) for c in grp_codes) for i in range(n)}
+                        g_pcts: dict[int, float] = {i: g_cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+                        return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+
+                    if _is_unified_choices(_choices_cfg_sr):
+                        sub_rows.extend(_render_unified_choices_rows(
+                            _choices_cfg_sr, _scodes, set(col_choices),
+                            _sr_pct_row, _sr_grp_row,
                         ))
+                    else:
+                        # Legacy: groups first, then display_codes
+                        for grp in _sub_ref_groups:
+                            grp_codes = [str(c) for c in grp.get("codes", []) if str(c) in col_choices]
+                            if not grp_codes: continue
+                            sub_rows.append(_sr_grp_row(grp_codes, grp["label"]))
+                            if grp.get("type", "combine") == "netted":
+                                for code in grp_codes: sub_rows.append(_sr_pct_row(code))
+                        _display_codes = _resolve_display_codes(_scodes, _choices_cfg_sr)
+                        for code in _display_codes: sub_rows.append(_sr_pct_row(code))
             if sub_rows:
                 blocks.append(StubBlock(
                     question_code=q.upper(),
@@ -1036,24 +1183,46 @@ def compute_table(
                         values={i: float(v) for i, v in paired_bases.items()},
                     ))
                 elif stat == "percent" and col_choices:
-                    for code in sorted(col_choices.keys(), key=lambda x: int(x)):
-                        cnts: dict[int, int]   = {}
-                        pcts: dict[int, float] = {}
-                        for i, bc in enumerate(banner_cols):
-                            base = paired_bases[i]
-                            if bc.matrix_row_code is not None:
-                                cnt = _paired_cnt(sub_dfs[i], bc.matrix_row_code, code)
-                            elif bc.matrix_row_codes is not None:
-                                cnt = sum(_paired_cnt(sub_dfs[i], rc, code)
-                                          for rc in bc.matrix_row_codes)
+                    _p_scodes = sorted(col_choices.keys(), key=lambda x: int(x))
+                    _choices_cfg_p = sc.get("choices", [])
+
+                    def _p_cnt_for_code(code: str) -> dict[int, int]:
+                        _cnts: dict[int, int] = {}
+                        for _i, _bc in enumerate(banner_cols):
+                            if _bc.matrix_row_code is not None:
+                                _cnts[_i] = _paired_cnt(sub_dfs[_i], _bc.matrix_row_code, code)
+                            elif _bc.matrix_row_codes is not None:
+                                _cnts[_i] = sum(_paired_cnt(sub_dfs[_i], rc, code) for rc in _bc.matrix_row_codes)
                             else:
-                                cnt = 0
-                            cnts[i] = cnt
-                            pcts[i] = cnt / base if base else 0.0
-                        p_rows.append(StubRow(
-                            label=_clabel(col_choices, code), row_type="percent",
-                            counts=cnts, values=pcts, code=code,
+                                _cnts[_i] = 0
+                        return _cnts
+
+                    def _p_pct_row(code: str) -> StubRow:
+                        cnts_ = _p_cnt_for_code(code)
+                        pcts_ = {i: cnts_[i] / paired_bases[i] if paired_bases[i] else 0.0 for i in range(n)}
+                        return StubRow(label=_clabel(col_choices, code), row_type="percent", counts=cnts_, values=pcts_, code=code)
+
+                    def _p_grp_row(grp_codes: list[str], label: str) -> StubRow:
+                        g_cnts: dict[int, int]   = {i: sum(_p_cnt_for_code(c).get(i, 0) for c in grp_codes) for i in range(n)}
+                        g_pcts: dict[int, float] = {i: g_cnts[i] / paired_bases[i] if paired_bases[i] else 0.0 for i in range(n)}
+                        return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+
+                    if _is_unified_choices(_choices_cfg_p):
+                        p_rows.extend(_render_unified_choices_rows(
+                            _choices_cfg_p, _p_scodes, set(col_choices),
+                            _p_pct_row, _p_grp_row,
                         ))
+                    else:
+                        # Legacy: groups first, then display_codes
+                        _p_groups = [g for g in sc.get("groups", []) if not g.get("hidden", False)]
+                        _p_display_codes = _resolve_display_codes(_p_scodes, _choices_cfg_p)
+                        for grp in _p_groups:
+                            grp_codes = [str(c) for c in grp.get("codes", []) if str(c) in col_choices]
+                            if not grp_codes: continue
+                            p_rows.append(_p_grp_row(grp_codes, grp["label"]))
+                            if grp.get("type", "combine") == "netted":
+                                for code in grp_codes: p_rows.append(_p_pct_row(code))
+                        for code in _p_display_codes: p_rows.append(_p_pct_row(code))
             if p_rows:
                 blocks.append(StubBlock(
                     question_code  = q.upper(),
@@ -1065,8 +1234,9 @@ def compute_table(
 
         # ── Matrix: expand into one block per sub-question (row) ─────────────
         if atype in MATRIX_TYPES:
-            sub_atype = "MA" if atype == "Matrix_MA" else "SA"
+            sub_atype   = "MA" if atype == "Matrix_MA" else "SA"
             col_choices = choices_i18n.get("columns", {}) if isinstance(choices_i18n, dict) else {}
+            mx_groups   = [g for g in sc.get("groups", []) if not g.get("hidden", False)]
             for sub_key, sub_meta in q_meta.get("sub_questions", {}).items():
                 sub_col      = _sub_q_col(sub_meta, sub_key)
                 sub_raw_cols = sub_meta.get("rawdata_columns", [])
@@ -1090,27 +1260,106 @@ def compute_table(
                             values={i: float(v) for i, v in sub_bases.items()},
                         ))
                     elif stat == "percent" and col_choices:
+                        _choices_cfg_mx = sc.get("choices", [])
                         _scodes = sorted(col_choices.keys(), key=lambda x: int(x))
                         if is_sub_ma:
                             _batch = [_code_counts_ma_batch(sub_dfs[i], sub_raw_cols, _scodes) for i in range(n)]
                         else:
                             _batch = [_code_counts_sc_batch(sub_dfs[i], sub_col, _scodes) for i in range(n)]
-                        # SA: pre-compute sig for all codes at once (vectorized)
                         _sa_sigs = (
                             {} if is_sub_ma
                             else _compute_sig_for_col(sub_col, _scodes, df, banner_cols, sig_config)
                         )
-                        for code in _scodes:
-                            cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
-                            pcts: dict[int, float] = {i: cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+
+                        def _mx_pct_row(code: str) -> StubRow:
+                            cnts_: dict[int, int]   = {i: _batch[i].get(code, 0) for i in range(n)}
+                            pcts_: dict[int, float] = {i: cnts_[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
                             if is_sub_ma:
                                 _bin = _ma_col_map(sub_raw_cols).get(code)
-                                sig  = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
+                                sig_ = _compute_sig_marks(_bin, "1", "SA", df, banner_cols, sig_config) if _bin else {}
                             else:
-                                sig = _sa_sigs.get(code, {})
+                                sig_ = _sa_sigs.get(code, {})
+                            return StubRow(label=_clabel(col_choices, code), row_type="percent", counts=cnts_, values=pcts_, sig_marks=sig_, code=code)
+
+                        def _mx_grp_row(grp_codes: list[str], label: str) -> StubRow:
+                            g_cnts: dict[int, int]   = {i: sum(_batch[i].get(c, 0) for c in grp_codes) for i in range(n)}
+                            g_pcts: dict[int, float] = {i: g_cnts[i] / sub_bases[i] if sub_bases[i] else 0.0 for i in range(n)}
+                            return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+
+                        if _is_unified_choices(_choices_cfg_mx):
+                            sub_rows.extend(_render_unified_choices_rows(
+                                _choices_cfg_mx, _scodes, set(col_choices),
+                                _mx_pct_row, _mx_grp_row,
+                            ))
+                        else:
+                            # Legacy: mx_groups first, then display_codes
+                            _display_codes = _resolve_display_codes(_scodes, _choices_cfg_mx)
+                            for grp in mx_groups:
+                                grp_codes = [str(c) for c in grp.get("codes", []) if str(c) in col_choices]
+                                if not grp_codes: continue
+                                sub_rows.append(_mx_grp_row(grp_codes, grp["label"]))
+                                if grp.get("type", "combine") == "netted":
+                                    for code in grp_codes: sub_rows.append(_mx_pct_row(code))
+                            for code in _display_codes: sub_rows.append(_mx_pct_row(code))
+                    elif stat in ("mean", "std", "se", "min", "max"):
+                        if is_sub_ma:
+                            # Matrix_MA: mean = avg number of columns selected per respondent
+                            _mx_ma_cols = [c for c in sub_raw_cols if c in df.columns]
+                            if not _mx_ma_cols:
+                                continue
+                            _mx_stat_vals: dict[int, float] = {}
+                            for i in range(n):
+                                _sub_ma = sub_dfs[i][[c for c in _mx_ma_cols if c in sub_dfs[i].columns]]
+                                _base = sub_bases[i]
+                                if _base == 0 or _sub_ma.empty:
+                                    _mx_stat_vals[i] = 0.0
+                                    continue
+                                _sels = _sub_ma.apply(pd.to_numeric, errors="coerce").fillna(0).clip(0, 1).sum(axis=1)
+                                _arr = _sels.to_numpy()
+                                _m = float(_arr.mean())
+                                _s = float(_arr.std(ddof=1)) if len(_arr) > 1 else 0.0
+                                if stat == "mean":  _mx_stat_vals[i] = round(_m, 2)
+                                elif stat == "std": _mx_stat_vals[i] = round(_s, 2)
+                                elif stat == "se":  _mx_stat_vals[i] = round(_s / np.sqrt(len(_arr)), 2)
+                                elif stat == "min": _mx_stat_vals[i] = round(float(_sels.min()), 2)
+                                elif stat == "max": _mx_stat_vals[i] = round(float(_sels.max()), 2)
                             sub_rows.append(StubRow(
-                                label=_clabel(col_choices, code), row_type="percent",
-                                counts=cnts, values=pcts, sig_marks=sig, code=code,
+                                label=STAT_LABELS[stat], row_type=stat,
+                                counts={i: 0 for i in _mx_stat_vals}, values=_mx_stat_vals,
+                            ))
+                        else:
+                            # Matrix_SA: mean of SA rating values per sub-question column
+                            if not sub_col or sub_col not in df.columns:
+                                continue
+                            _cf_mx = _extract_factors_from_choices(sc.get("choices", []))
+                            _mf = _cf_mx or sc.get("factors") or sc.get("mean_factor")
+                            if not _mf:
+                                sub_rows.append(StubRow(
+                                    label=STAT_LABELS[stat], row_type=stat,
+                                    counts={i: 0 for i in range(n)},
+                                    values={i: 0.0 for i in range(n)},
+                                ))
+                                continue
+                            _mx_stat_vals: dict[int, float] = {}
+                            for i in range(n):
+                                _raw = pd.to_numeric(sub_dfs[i][sub_col], errors="coerce").dropna()
+                                if len(_raw) == 0:
+                                    _mx_stat_vals[i] = 0.0
+                                    continue
+                                _num = _raw.map(lambda v: _mf.get(str(int(v)), _mf.get(int(v)))).dropna() if _mf else _raw
+                                if len(_num) == 0:
+                                    _mx_stat_vals[i] = 0.0
+                                    continue
+                                _m = float(_num.mean())
+                                _s = float(_num.std(ddof=1)) if len(_num) > 1 else 0.0
+                                if stat == "mean":  _mx_stat_vals[i] = round(_m, 2)
+                                elif stat == "std": _mx_stat_vals[i] = round(_s, 2)
+                                elif stat == "se":  _mx_stat_vals[i] = round(_s / np.sqrt(len(_num)), 2)
+                                elif stat == "min": _mx_stat_vals[i] = round(float(_num.min()), 2)
+                                elif stat == "max": _mx_stat_vals[i] = round(float(_num.max()), 2)
+                            sub_rows.append(StubRow(
+                                label=STAT_LABELS[stat], row_type=stat,
+                                counts={i: 0 for i in _mx_stat_vals}, values=_mx_stat_vals,
                             ))
                 if sub_rows:
                     blocks.append(StubBlock(
@@ -1244,6 +1493,42 @@ def compute_table(
             for i in range(n)
         }
 
+        # ── FT (freetext) question — dynamic choices auto-discovered from rawdata ──
+        # Unique non-empty text values become percent rows (like SA with no predefined codes).
+        # Sig test is not available for text values.
+        if atype == "FT":
+            ft_series = df[q_col].dropna().astype(str).str.strip()
+            ft_unique  = sorted(ft_series[ft_series != ""].unique())
+            ft_rows: list[StubRow] = []
+            for stat in req_stats:
+                if stat == "base":
+                    ft_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(bases),
+                        values={i: float(v) for i, v in bases.items()},
+                    ))
+                elif stat == "percent":
+                    for val in ft_unique:
+                        cnts_ft: dict[int, int]   = {}
+                        pcts_ft: dict[int, float] = {}
+                        for i in range(n):
+                            sub_s   = sub_dfs[i][q_col].dropna().astype(str).str.strip()
+                            cnt     = int((sub_s == val).sum())
+                            cnts_ft[i] = cnt
+                            pcts_ft[i] = cnt / bases[i] if bases[i] else 0.0
+                        ft_rows.append(StubRow(
+                            label=val, row_type="percent",
+                            counts=cnts_ft, values=pcts_ft,
+                        ))
+            if ft_rows:
+                blocks.append(StubBlock(
+                    question_code=q.upper(),
+                    question_label=q_label,
+                    answer_type=atype,
+                    rows=ft_rows,
+                ))
+            continue
+
         def _sig_for_code(code: str) -> dict:
             """Sig marks for a code, routing to the correct column."""
             if is_ma:
@@ -1270,11 +1555,8 @@ def compute_table(
                 if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
 
-                stub_groups   = sc.get("groups", [])
-                grouped_codes: set[str] = {
-                    str(c) for grp in stub_groups for c in grp.get("codes", [])
-                }
-                sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
+                _choices_cfg = sc.get("choices", [])
+                sorted_codes  = sorted(choices_i18n.keys(), key=lambda x: int(x))
 
                 # Batch: one value_counts (SA) or one .sum() (MA) per banner col.
                 if is_ma:
@@ -1302,44 +1584,46 @@ def compute_table(
                         _pcts[_i] = _cnt / _base if _base else 0.0
                     return _cnts, _pcts
 
-                # ── Groups (combine / netted) ─────────────────────────────
-                for grp in stub_groups:
-                    grp_codes = [
-                        str(c) for c in grp.get("codes", [])
-                        if str(c) in choices_i18n
-                    ]
-                    if not grp_codes:
-                        continue
-                    grp_type = grp.get("type", "netted")
-
-                    g_cnts, g_pcts = _cnt_pct_union(grp_codes)
-                    rows.append(StubRow(
-                        label=grp["label"], row_type="group",
-                        counts=g_cnts, values=g_pcts,
-                    ))
-
-                    if grp_type == "netted":
-                        for code in grp_codes:
-                            cnts: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
-                            pcts: dict[int, float] = {i: cnts[i] / bases[i] if bases[i] else 0.0
-                                                      for i in range(n)}
-                            sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
-                            rows.append(StubRow(
-                                label=_clabel(choices_i18n, code), row_type="percent",
-                                counts=cnts, values=pcts, sig_marks=sig, code=code,
-                            ))
-
-                # ── Ungrouped codes ───────────────────────────────────────
-                for code in sorted_codes:
-                    if code in grouped_codes:
-                        continue
-                    cnts = {i: _batch[i][code] for i in range(n)}
-                    pcts = {i: cnts[i] / bases[i] if bases[i] else 0.0 for i in range(n)}
-                    sig = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
-                    rows.append(StubRow(
+                def _sa_pct_row(code: str) -> StubRow:
+                    """Build a percent StubRow for a single code."""
+                    cnts_: dict[int, int]   = {i: _batch[i][code] for i in range(n)}
+                    pcts_: dict[int, float] = {i: cnts_[i] / bases[i] if bases[i] else 0.0
+                                               for i in range(n)}
+                    sig_ = _sa_sigs.get(code, {}) if not is_ma else _sig_for_code(code)
+                    return StubRow(
                         label=_clabel(choices_i18n, code), row_type="percent",
-                        counts=cnts, values=pcts, sig_marks=sig, code=code,
+                        counts=cnts_, values=pcts_, sig_marks=sig_, code=code,
+                    )
+
+                if _is_unified_choices(_choices_cfg):
+                    def _sa_grp_row(grp_codes: list[str], label: str) -> StubRow:
+                        g_cnts, g_pcts = _cnt_pct_union(grp_codes)
+                        return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+                    rows.extend(_render_unified_choices_rows(
+                        _choices_cfg, sorted_codes, set(choices_i18n),
+                        _sa_pct_row, _sa_grp_row,
                     ))
+                else:
+                    # ── Legacy mode: groups first, then display_codes ─────────────
+                    # Default group type "combine": summary only; "netted": indented codes.
+                    stub_groups   = [g for g in sc.get("groups", []) if not g.get("hidden", False)]
+                    display_codes = _resolve_display_codes(sorted_codes, _choices_cfg)
+
+                    for grp in stub_groups:
+                        grp_codes = [str(c) for c in grp.get("codes", []) if str(c) in choices_i18n]
+                        if not grp_codes:
+                            continue
+                        g_cnts, g_pcts = _cnt_pct_union(grp_codes)
+                        rows.append(StubRow(
+                            label=grp["label"], row_type="group",
+                            counts=g_cnts, values=g_pcts,
+                        ))
+                        if grp.get("type", "combine") == "netted":
+                            for code in grp_codes:
+                                rows.append(_sa_pct_row(code))
+
+                    for code in display_codes:
+                        rows.append(_sa_pct_row(code))
 
             elif stat in ("t2b", "b2b"):
                 if atype not in CODEABLE_TYPES or not choices_i18n:
@@ -1366,45 +1650,120 @@ def compute_table(
                     counts=cnts, values=pcts,
                 ))
 
-            elif stat in ("mean", "std", "se", "min", "max"):
-                if atype not in NUMERIC_TYPES:
+            elif stat == "nps":
+                if atype not in CODEABLE_TYPES or not choices_i18n:
                     continue
-                if atype == "SA" and not choices_i18n:
+                _choices_cfg_nps = sc.get("choices", [])
+                _nps_p_codes: list[str] = []
+                _nps_d_codes: list[str] = []
+                for _e in _choices_cfg_nps:
+                    _etype = _e.get("type", "")
+                    if _etype == "promoters":
+                        _nps_p_codes.extend(str(c) for c in _e.get("codes", []))
+                    elif _etype == "detractors":
+                        _nps_d_codes.extend(str(c) for c in _e.get("codes", []))
+                # Fallback: explicit nps_promoters / nps_detractors keys on stub entry
+                if not _nps_p_codes and sc.get("nps_promoters"):
+                    _nps_p_codes = [str(c) for c in sc["nps_promoters"]]
+                if not _nps_d_codes and sc.get("nps_detractors"):
+                    _nps_d_codes = [str(c) for c in sc["nps_detractors"]]
+                if not _nps_p_codes and not _nps_d_codes:
                     continue
-                # mean_factor: {"1": 5, "2": 4, ...} maps code → numeric weight (SA only)
-                mean_factor: dict | None = sc.get("mean_factor") if atype == "SA" else None
-                stat_vals: dict[int, float] = {}
+                nps_vals: dict[int, float] = {}
                 for i in range(n):
-                    raw = pd.to_numeric(sub_dfs[i][q_col], errors="coerce").dropna()
-                    if len(raw) == 0:
-                        stat_vals[i] = 0.0
+                    base = bases[i]
+                    if base == 0:
+                        nps_vals[i] = 0.0
                         continue
-                    if mean_factor:
-                        numeric = raw.map(
-                            lambda v: mean_factor.get(str(int(v)), mean_factor.get(int(v)))
-                        ).dropna()
+                    if is_ma:
+                        p_cnt = sum(_code_count_ma(sub_dfs[i], ma_raw_cols, c) for c in _nps_p_codes)
+                        d_cnt = sum(_code_count_ma(sub_dfs[i], ma_raw_cols, c) for c in _nps_d_codes)
                     else:
-                        numeric = raw
-                    if len(numeric) == 0:
-                        stat_vals[i] = 0.0
-                        continue
-                    m = float(numeric.mean())
-                    s = float(numeric.std(ddof=1)) if len(numeric) > 1 else 0.0
-                    if stat == "mean":
-                        stat_vals[i] = round(m, 2)
-                    elif stat == "std":
-                        stat_vals[i] = round(s, 2)
-                    elif stat == "se":
-                        stat_vals[i] = round(s / np.sqrt(len(numeric)), 2)
-                    elif stat == "min":
-                        stat_vals[i] = round(float(numeric.min()), 2)
-                    elif stat == "max":
-                        stat_vals[i] = round(float(numeric.max()), 2)
+                        p_cnt = sum(_code_count_sc(sub_dfs[i], q_col, c) for c in _nps_p_codes)
+                        d_cnt = sum(_code_count_sc(sub_dfs[i], q_col, c) for c in _nps_d_codes)
+                    nps_vals[i] = round((p_cnt / base - d_cnt / base) * 100, 2)
                 rows.append(StubRow(
-                    label=STAT_LABELS[stat], row_type=stat,
-                    counts={i: 0 for i in stat_vals},
-                    values=stat_vals,
+                    label=STAT_LABELS["nps"], row_type="nps",
+                    counts={i: 0 for i in nps_vals}, values=nps_vals,
                 ))
+
+            elif stat in ("mean", "std", "se", "min", "max"):
+                if atype == "MA":
+                    # MA mean = average number of codes selected per respondent.
+                    # Base = respondents who saw the question (any binary col non-NaN).
+                    _ma_bin = [c for c in ma_raw_cols if c in df.columns]
+                    if not _ma_bin:
+                        continue
+                    stat_vals: dict[int, float] = {}
+                    for i in range(n):
+                        _sub_ma = sub_dfs[i][[c for c in _ma_bin if c in sub_dfs[i].columns]]
+                        _base = bases[i]
+                        if _base == 0 or _sub_ma.empty:
+                            stat_vals[i] = 0.0
+                            continue
+                        _sels = _sub_ma.apply(pd.to_numeric, errors="coerce").fillna(0).clip(0, 1).sum(axis=1)
+                        _arr = _sels.to_numpy()
+                        _m = float(_arr.mean())
+                        _s = float(_arr.std(ddof=1)) if len(_arr) > 1 else 0.0
+                        if stat == "mean":  stat_vals[i] = round(_m, 2)
+                        elif stat == "std": stat_vals[i] = round(_s, 2)
+                        elif stat == "se":  stat_vals[i] = round(_s / np.sqrt(len(_arr)), 2)
+                        elif stat == "min": stat_vals[i] = round(float(_sels.min()), 2)
+                        elif stat == "max": stat_vals[i] = round(float(_sels.max()), 2)
+                    rows.append(StubRow(
+                        label=STAT_LABELS[stat], row_type=stat,
+                        counts={i: 0 for i in stat_vals}, values=stat_vals,
+                    ))
+                elif atype not in NUMERIC_TYPES:
+                    continue
+                else:
+                    if atype == "SA" and not choices_i18n:
+                        continue
+                    # factors / mean_factor: maps code → numeric weight (SA only).
+                    # Priority: per-choice "factor" fields → "factors" dict → "mean_factor" dict.
+                    mean_factor: dict | None = None
+                    if atype == "SA":
+                        _cf = _extract_factors_from_choices(sc.get("choices", []))
+                        mean_factor = _cf or sc.get("factors") or sc.get("mean_factor")
+                        if not mean_factor:
+                            rows.append(StubRow(
+                                label=STAT_LABELS[stat], row_type=stat,
+                                counts={i: 0 for i in range(n)},
+                                values={i: 0.0 for i in range(n)},
+                            ))
+                            continue
+                    stat_vals: dict[int, float] = {}
+                    for i in range(n):
+                        raw = pd.to_numeric(sub_dfs[i][q_col], errors="coerce").dropna()
+                        if len(raw) == 0:
+                            stat_vals[i] = 0.0
+                            continue
+                        if mean_factor:
+                            numeric = raw.map(
+                                lambda v: mean_factor.get(str(int(v)), mean_factor.get(int(v)))
+                            ).dropna()
+                        else:
+                            numeric = raw
+                        if len(numeric) == 0:
+                            stat_vals[i] = 0.0
+                            continue
+                        m = float(numeric.mean())
+                        s = float(numeric.std(ddof=1)) if len(numeric) > 1 else 0.0
+                        if stat == "mean":
+                            stat_vals[i] = round(m, 2)
+                        elif stat == "std":
+                            stat_vals[i] = round(s, 2)
+                        elif stat == "se":
+                            stat_vals[i] = round(s / np.sqrt(len(numeric)), 2)
+                        elif stat == "min":
+                            stat_vals[i] = round(float(numeric.min()), 2)
+                        elif stat == "max":
+                            stat_vals[i] = round(float(numeric.max()), 2)
+                    rows.append(StubRow(
+                        label=STAT_LABELS[stat], row_type=stat,
+                        counts={i: 0 for i in stat_vals},
+                        values=stat_vals,
+                    ))
 
         blocks.append(StubBlock(
             question_code=q.upper(),

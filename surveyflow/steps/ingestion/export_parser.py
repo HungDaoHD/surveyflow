@@ -23,7 +23,6 @@ PERSONAL_COLS: set[str] = {
     "Store Latitude", "Store Longitude",
     "Detect fake GPS",
     "Check in", "Check in system", "Check out", "Distance",
-    "PVV",
     "phone",
 }
 

@@ -646,6 +646,6 @@ const doc = new Document({
 });
 
 Packer.toBuffer(doc).then((buf) => {
-  fs.writeFileSync("docs/HUONG_DAN_SURVEYFLOW.docx", buf);
-  console.log("✅  Saved: docs/HUONG_DAN_SURVEYFLOW.docx");
+  fs.writeFileSync("docs/CLAUDE_CHAT_GUIDE.docx", buf);
+  console.log("✅  Saved: docs/CLAUDE_CHAT_GUIDE.docx");
 });

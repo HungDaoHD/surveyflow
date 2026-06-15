@@ -56,6 +56,9 @@ step4_form.html
 qme_auth.py
 
 
+# Node
+node_modules/
+
 # Others
 priority.png
 publish note.txt

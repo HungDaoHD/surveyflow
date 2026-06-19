@@ -23,6 +23,7 @@ Before executing **any** of the following actions, summarize what Claude is abou
 | Run pipeline | "Tôi sẽ chạy pipeline vX với config hiện tại. Bạn xác nhận chạy không?" |
 | Modify `datatable.json` | "Tôi sẽ sửa datatable.json: [mô tả thay đổi]. Bạn xác nhận không?" |
 | Fetch data from QMe | "Tôi sẽ fetch lại data từ QMe và ghi đè input files. Bạn xác nhận không?" |
+| Code FT questions | "Tôi sẽ classify [N] responses cho câu [Q_label] theo codelist [X codes]. Bạn xác nhận không?" |
 
 **Rules:**
 - Always confirm **before** acting, never after
@@ -232,6 +233,92 @@ When user says things like:
 2. Modify it according to user request
 3. Save `datatable.json`
 4. Run pipeline with new version (increment v1→v2→v3…) — table-only, no `--mcp-dir` needed
+
+---
+
+## Workflow C — FT (Open-ended) Analysis
+
+When user says: *"code câu FT"*, *"analyze open-ended"*, *"tạo codelist"*, *"code câu mở Q5"*, *"classify responses"*
+
+### Step 1 — Identify FT questions
+
+Read `output/SURVEY_NAME/data/metadata.json` → find all questions with type `FT`.
+
+Display list and ask:
+> "Tìm thấy X câu FT: Q5 (Lý do chọn), Q10 (Khác - ghi rõ). Bạn muốn code tất cả hay chỉ một số câu?"
+
+### Step 2 — Create codelist (per FT question)
+
+**Nếu user cung cấp codelist** → dùng đúng code numbers của user, bỏ qua bước generate.
+
+**Nếu user không cung cấp → Thematic Analysis (recommended):**
+- Đọc **tất cả** responses của câu FT từ `rawdata.csv` (không chỉ sample)
+- Claude phân tích toàn bộ → phát hiện themes bottom-up → đề xuất codelist
+- Ưu điểm so với sampling: không bỏ sót minority themes, codelist gắn với data thực tế
+- User review/chỉnh sửa → user xác nhận trước khi classify
+
+Luôn thêm 2 code cuối:
+- `{ "code": 98, "label": "Others" }` — response không khớp code nào
+- `{ "code": 99, "label": "No answer" }` — blank / NA / không trả lời
+
+Save mỗi câu một file: `output/SURVEY_NAME/data/ft_codelist_{Q_label}.json`
+
+```json
+{
+  "question": "Q5",
+  "label": "Lý do chọn sản phẩm",
+  "codes": [
+    { "code": 1, "label": "Giá cả / Tiết kiệm" },
+    { "code": 2, "label": "Chất lượng tốt" },
+    { "code": 3, "label": "Tin tưởng thương hiệu" },
+    { "code": 98, "label": "Others" },
+    { "code": 99, "label": "No answer" }
+  ]
+}
+```
+
+### Step 3 — Classify (batch tất cả FT questions)
+
+Xử lý lần lượt từng FT question. Với mỗi câu:
+- Đọc cột FT từ `rawdata.csv`
+- Batch 20–30 responses mỗi lần
+- Multi-code: 1 response có thể nhận nhiều code
+- Code 99 nếu response rỗng / null / "N/A" / không trả lời
+- Code 98 nếu response có nội dung nhưng không khớp code nào
+
+**Prompt pattern cho classification:**
+```
+Codelist:
+1 = [label]
+2 = [label]
+98 = Others (có nội dung nhưng không khớp code nào)
+99 = No answer (trống / NA / không trả lời)
+
+Classify từng response bên dưới. Multi-code được phép.
+Trả về JSON: [{"id": "R001", "codes": [1, 3]}, ...]
+
+Responses:
+R001: "[text]"
+R002: "[text]"
+...
+```
+
+### Step 4 — Output
+
+Write `output/SURVEY_NAME/data/ft_coded.csv`:
+- Cột `resp_id` match với `rawdata.csv`
+- Binary columns: `{Q_label}_c{code}` → giá trị `1` hoặc `0`
+- Tất cả FT questions trong cùng 1 file
+
+```
+resp_id, Q5_c1, Q5_c2, Q5_c3, Q5_c98, Q5_c99, Q10_c1, Q10_c98, Q10_c99
+R001,    1,     0,     1,     0,      0,      1,      0,       0
+R002,    0,     1,     0,     0,      0,      0,      1,       0
+R003,    0,     0,     0,     0,      1,      0,      0,       1
+```
+
+> **Sau khi xong:** Hỏi user có muốn thêm các cột FT coded vào datatable không.
+> Nếu có → đợi user yêu cầu cụ thể (Workflow B).
 
 ---
 
@@ -476,7 +563,9 @@ output/SURVEY_NAME/
 │   └── data_export.csv       ← assembled from read_survey_data_file chunks
 ├── data/                     ← rawdata.csv + metadata.json (generated from mcp/, reused)
 │   ├── rawdata.csv
-│   └── metadata.json
+│   ├── metadata.json
+│   ├── ft_codelist_Q5.json   ← codelist per FT question (Claude hoặc user tạo)
+│   └── ft_coded.csv          ← binary coded output cho tất cả FT questions
 ├── datatable/                ← Claude manages this file
 │   └── datatable.json
 ├── v1/                       ← datatable.xlsx only
@@ -511,6 +600,10 @@ output/SURVEY_NAME/
 | "brand header, Castrol và Shell riêng, nhóm International" | Thêm `banner_matrix` với `groups` mix `row_code`/`row_codes` |
 | "bảng bình thường + bảng matrix brand" | Tạo 2 items trong array: 1 không có banner_matrix, 1 có |
 | "refresh data / lấy data mới" | Re-fetch (prepare→poll→read) → overwrite `mcp/data_export.csv` → re-run với `--export-csv` + `--force-ingestion` |
+| "code câu FT / open-ended" | Workflow C: identify FT → tạo codelist → classify → ghi `ft_coded.csv` |
+| "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
+| "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
+| "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
 
 ---
 

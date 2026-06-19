@@ -57,6 +57,7 @@ class BannerColumn:
     level_labels:    list[str]  = field(default_factory=list)
     matrix_row_code:  str | None       = None  # single row → paired mode
     matrix_row_codes: list[str] | None = None  # multiple rows → stacked paired mode
+    from_total:       bool             = False  # True if derived from the Total base column
 
     def to_dict(self) -> dict:
         """Serialisable representation for JSON/preview API.
@@ -624,6 +625,7 @@ def nest_banner_with_matrix_rows(
                 level_labels     = level_prefix,
                 matrix_row_code  = bi["row_code"],
                 matrix_row_codes = bi["row_codes"],
+                from_total       = col.is_total,
             ))
             letter_idx += 1
 

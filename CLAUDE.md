@@ -472,13 +472,106 @@ With explicit `groups`:
 ```
 
 **Groups rules:**
-- `row_code` (string): single brand row → paired mode reads `{q_col}_r{code}` per column
-- `row_codes` (list): grouped brands → stacked mode sums counts across all `{q_col}_r{rc}` columns
+- `row_code` / `row_codes` chấp nhận **số nguyên hoặc string** (pipeline tự convert sang string)
+- `row_code` (single): paired mode reads `{q_col}_r{code}` per column
+- `row_codes` (list): stacked mode sums counts across all `{q_col}_r{rc}` columns
 - Mix of both is allowed in the same `groups` array
 
 **Header levels produced:**
 - Total column + each brand: `Total / Brand` (2 levels)
 - Store Type column + each brand: `Store Type / Sub-group / Brand` (3 levels)
+
+### matrix_orientation — Matrix rows as banner sub-columns (table-level)
+
+Dùng `"matrix_orientation": "horizontal"` khi toàn bộ stub là các câu matrix có **cùng rows** và muốn:
+- **Rows → banner sub-columns** (xuất hiện dưới mỗi banner group: Total/Brand A, Total/Brand B...)
+- **Choices → stub rows** (Very satisfied, Satisfied, Neutral...)
+
+```json
+{
+  "type": "datatable",
+  "sub_title": "Brand Analysis",
+  "matrix_orientation": "horizontal",
+  "banner": [
+    { "label": "Total", "filter": null },
+    {
+      "label": "Gender",
+      "question": "S1",
+      "groups": [
+        { "label": "Male",   "value": 1 },
+        { "label": "Female", "value": 2 }
+      ]
+    }
+  ],
+  "stub": [
+    { "question": "Q17", "label": "Brand Satisfaction", "stats": ["base", "percent"] },
+    { "question": "Q18", "label": "Brand Usage Freq",   "stats": ["base", "percent"] },
+    { "question": "Q19", "label": "Brand Imagery",      "stats": ["base", "percent"] }
+  ],
+  "tables": [...]
+}
+```
+
+**Output layout:**
+```
+                       | Total              | Male               | Female
+                       | Br.A  Br.B  Br.C  | Br.A  Br.B  Br.C  | Br.A  Br.B  Br.C
+Q17 Brand Satisfaction
+  Very satisfied        | 30%   25%   20%   | 35%   28%   22%   | ...
+  Satisfied             | 40%   38%   35%   | 38%   36%   33%   | ...
+  Neutral               | 20%   25%   30%   | ...
+Q18 Brand Usage Freq
+  Every day             | 15%   12%    8%   | ...
+  Weekly                | 30%   28%   25%   | ...
+```
+
+**Rules:**
+- Tất cả stub entries phải là matrix questions (`Matrix_SA`, `Matrix_MA`, `Matrix_NUM`)
+- Tất cả phải có cùng `choices_i18n.rows` (pipeline báo lỗi nếu không match)
+- Không mix SA/MA thường vào stub khi dùng `matrix_orientation: "horizontal"`
+- Nếu cần chạy cả câu thường lẫn matrix horizontal → tạo 2 table items riêng trong array
+- Default (bỏ qua hoặc `"vertical"`) → behavior hiện tại (expand theo rows)
+
+**So sánh với `banner_matrix`:**
+
+| | `banner_matrix` | `matrix_orientation: "horizontal"` |
+|---|---|---|
+| Config | Cấp table, 1 câu matrix làm header | Cấp table, áp dụng cho tất cả stub entries |
+| Rows | Từ 1 câu matrix chỉ định | Lấy từ tất cả câu trong stub (phải đồng nhất) |
+| Stub | Paired mode — câu matrix trong stub dùng rows từ banner_matrix | Choices của mỗi câu thành stub rows |
+| Dùng khi | Cần chọn brands cụ thể, group brands | Tất cả câu đều là matrix, cùng rows |
+
+### matrix_rows — show/hide/combine brand sub-columns
+
+Dùng trong table item có `matrix_orientation: "horizontal"` để chọn rows nào xuất hiện làm sub-columns, và nhóm nhiều rows thành 1 column.
+
+```json
+"matrix_rows": [
+  { "row_code": 1,                        "label": "STING" },
+  { "row_code": 2,                        "label": "RED BULL" },
+  { "row_code": 3,                        "label": "NUMBER 1" },
+  { "row_codes": [4, 5, 6, 7, 9, 10],    "label": "Others" }
+]
+```
+
+**Rules:**
+- `row_code` / `row_codes` chấp nhận số nguyên hoặc string
+- Rows không có trong `matrix_rows` → tự động ẩn
+- Bỏ qua `matrix_rows` (hoặc để `null`) → tất cả rows từ metadata đều hiện
+- `row_codes` (list) → stacked mode: cộng dồn counts của tất cả rows được liệt kê
+
+### sig_direction — chiều so sánh sig test
+
+Dùng trong table item có `matrix_orientation: "horizontal"`.
+
+```json
+"sig_direction": "rows"
+```
+
+- `"rows"` (default): so sánh **brands với nhau** trong cùng 1 demographic group → "trong Total, STING vs RED BULL"
+- `"columns"`: so sánh **demographics với nhau** trong cùng 1 brand → "với STING, Total vs Male vs Female"
+
+> Use case `"columns"` ít gặp. Default `"rows"` là đúng cho hầu hết trường hợp.
 
 ### Stub rules
 - One entry per question
@@ -486,6 +579,7 @@ With explicit `groups`:
 - Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`
   - Matrix questions automatically expand into one block per row (sub-question)
   - When `banner_matrix` is active, matrix questions use paired mode instead
+  - When `matrix_orientation: "horizontal"` is active, matrix rows → banner sub-columns, choices → stub rows
 - Excluded automatically: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
 - **Stub order follows datatable.json** — pipeline outputs questions in the order they appear
 
@@ -599,6 +693,11 @@ output/SURVEY_NAME/
 | "brand làm header, tất cả brands" | Thêm `banner_matrix: { question: "QX" }` (không có groups) |
 | "brand header, Castrol và Shell riêng, nhóm International" | Thêm `banner_matrix` với `groups` mix `row_code`/`row_codes` |
 | "bảng bình thường + bảng matrix brand" | Tạo 2 items trong array: 1 không có banner_matrix, 1 có |
+| "chạy bảng matrix, brands ngang, choices dọc" | Thêm `"matrix_orientation": "horizontal"` ở cấp table item; stub chỉ gồm matrix questions cùng rows |
+| "tách bảng câu thường và bảng matrix horizontal" | Tạo 2 table items: 1 stub SA/MA thường, 1 stub matrix với `matrix_orientation: "horizontal"` |
+| "chỉ hiện 4 brands, nhóm còn lại thành Others" | Thêm `matrix_rows` với `row_code` cho từng brand riêng, `row_codes` cho nhóm Others |
+| "ẩn brand X khỏi bảng horizontal" | Xoá row_code đó ra khỏi `matrix_rows` (hoặc không liệt kê nó) |
+| "compare demographics within each brand" | Thêm `"sig_direction": "columns"` vào table item |
 | "refresh data / lấy data mới" | Re-fetch (prepare→poll→read) → overwrite `mcp/data_export.csv` → re-run với `--export-csv` + `--force-ingestion` |
 | "code câu FT / open-ended" | Workflow C: identify FT → tạo codelist → classify → ghi `ft_coded.csv` |
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |

@@ -301,13 +301,23 @@ def _compute_sig_marks(
     # ────────────────────────────────────────────────────────────────────────
 
     # Group non-total column indices for pairwise comparison.
-    # Columns are compared within the same (group_label, level_labels[0], …) bucket,
-    # i.e. only against siblings that share all parent level labels.
+    # sig_direction=="rows" (default): compare within same demographic group
+    # sig_direction=="columns": compare across demographics within the same brand
+    sig_direction = sig_config.get("sig_direction", "rows")
+    col_letters   = sig_config.get("col_letters")  # {banner_idx: letter} for "columns" mode
+
     groups: dict[str, list[int]] = {}
     for i, bc in enumerate(banner_cols):
         if bc.is_total:
             continue
-        key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
+        if sig_direction == "columns":
+            if getattr(bc, "from_total", False):
+                continue
+            key = bc.matrix_row_code or (
+                "|".join(bc.matrix_row_codes) if bc.matrix_row_codes else bc.subgroup_label
+            )
+        else:
+            key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
         groups.setdefault(key, []).append(i)
 
     marks: dict[int, list[str]] = {i: [] for i in range(len(banner_cols))}
@@ -358,7 +368,7 @@ def _compute_sig_marks(
                     # winner (higher proportion) gets the loser's letter
                     winner = i1 if t_stat > 0 else i2
                     loser  = i2 if t_stat > 0 else i1
-                    loser_letter = banner_cols[loser].letter
+                    loser_letter = (col_letters or {}).get(loser, banner_cols[loser].letter)
 
                     if alpha95 and p_val < alpha95:
                         marks[winner].append(loser_letter.upper())
@@ -410,11 +420,21 @@ def _compute_sig_for_col(
     }
     # ─────────────────────────────────────────────────────────────────────────
 
+    sig_direction = sig_config.get("sig_direction", "rows")
+    col_letters   = sig_config.get("col_letters")
+
     groups: dict[str, list[int]] = {}
     for i, bc in enumerate(banner_cols):
         if bc.is_total:
             continue
-        key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
+        if sig_direction == "columns":
+            if getattr(bc, "from_total", False):
+                continue
+            key = bc.matrix_row_code or (
+                "|".join(bc.matrix_row_codes) if bc.matrix_row_codes else bc.subgroup_label
+            )
+        else:
+            key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
         groups.setdefault(key, []).append(i)
 
     K = len(codes)
@@ -480,7 +500,119 @@ def _compute_sig_for_col(
                             continue
                         winner = i1 if t_stat > 0 else i2
                         loser  = i2 if t_stat > 0 else i1
-                        letter = banner_cols[loser].letter
+                        letter = (col_letters or {}).get(loser, banner_cols[loser].letter)
+                        if alpha95 and p_val < alpha95:
+                            marks[codes[k]][winner].append(letter.upper())
+                        elif alpha90 and p_val < alpha90:
+                            marks[codes[k]][winner].append(letter.lower())
+
+    return {c: {i: "".join(marks[c][i]) for i in range(n_cols)} for c in codes}
+
+
+def _compute_sig_paired_mode(
+    codes: list[str],
+    banner_cols: list["BannerColumn"],
+    df: pd.DataFrame,
+    col_fn,       # callable: BannerColumn -> str | None
+    sig_config: dict,
+) -> "dict[str, dict[int, str]]":
+    """Sig test for paired-mode (matrix_orientation=horizontal) questions.
+
+    Each banner column reads from a *different* data column (col_fn maps bc →
+    actual df column).  Only banner columns with a single matrix_row_code are
+    tested; grouped row_codes columns are skipped.
+    """
+    n_cols = len(banner_cols)
+    empty  = {c: {i: "" for i in range(n_cols)} for c in codes}
+    if not sig_config.get("enabled", False) or not codes:
+        return empty
+
+    levels  = sig_config.get("levels", [95])
+    method  = sig_config.get("method", "independent")
+    alpha95 = 0.05 if 95 in levels else None
+    alpha90 = 0.10 if 90 in levels else None
+    sig_direction = sig_config.get("sig_direction", "rows")
+    col_letters   = sig_config.get("col_letters")
+
+    code_ints = np.array([int(c) for c in codes], dtype=np.float64)
+    K = len(codes)
+
+    # Pre-compute per-banner column numeric array (only single row_code cols).
+    bc_arrs: dict[int, np.ndarray] = {}
+    for i, bc in enumerate(banner_cols):
+        if bc.is_total or bc.matrix_row_codes is not None:
+            continue
+        col = col_fn(bc)
+        if col is None or col not in df.columns:
+            continue
+        bc_arrs[i] = pd.to_numeric(df[col][bc.mask], errors="coerce").fillna(-1).to_numpy()
+
+    # Build comparison groups.
+    groups: dict[str, list[int]] = {}
+    for i, bc in enumerate(banner_cols):
+        if bc.is_total or bc.matrix_row_codes is not None:
+            continue
+        if i not in bc_arrs:
+            continue
+        if sig_direction == "columns":
+            if getattr(bc, "from_total", False):
+                continue
+            key = bc.matrix_row_code or bc.subgroup_label
+        else:
+            key = bc.group_label + ("|" + "|".join(bc.level_labels) if bc.level_labels else "")
+        groups.setdefault(key, []).append(i)
+
+    marks: dict[str, dict[int, list[str]]] = {c: {i: [] for i in range(n_cols)} for c in codes}
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Precision loss occurred", category=RuntimeWarning)
+        for grp_indices in groups.values():
+            for a in range(len(grp_indices)):
+                for b in range(a + 1, len(grp_indices)):
+                    i1, i2 = grp_indices[a], grp_indices[b]
+                    s1 = bc_arrs.get(i1)
+                    s2 = bc_arrs.get(i2)
+                    if s1 is None or s2 is None:
+                        continue
+                    n1, n2 = len(s1), len(s2)
+                    if n1 < 2 or n2 < 2:
+                        continue
+
+                    try:
+                        arr1 = (s1[:, None] == code_ints).astype(np.float64)
+                        arr2 = (s2[:, None] == code_ints).astype(np.float64)
+
+                        if method == "related" and n1 == n2:
+                            diff   = arr1 - arr2
+                            m_diff = diff.mean(0)
+                            s_diff = diff.std(0, ddof=1) if n1 > 1 else np.zeros(K)
+                            se     = s_diff / np.sqrt(n1)
+                            valid  = se > 0
+                            t_stats = np.where(valid, m_diff / np.where(valid, se, 1.0), 0.0)
+                            df_w    = np.full(K, float(n1 - 1))
+                        else:
+                            m1, m2 = arr1.mean(0), arr2.mean(0)
+                            v1 = arr1.var(0, ddof=1) if n1 > 1 else np.zeros(K)
+                            v2 = arr2.var(0, ddof=1) if n2 > 1 else np.zeros(K)
+                            v1n, v2n = v1 / n1, v2 / n2
+                            se = np.sqrt(v1n + v2n)
+                            valid = se > 0
+                            t_stats = np.where(valid, (m1 - m2) / np.where(valid, se, 1.0), 0.0)
+                            denom = (v1n ** 2 / (n1 - 1)) + (v2n ** 2 / (n2 - 1))
+                            df_w  = np.where(denom > 0, (v1n + v2n) ** 2 / np.where(denom > 0, denom, 1.0), 1.0)
+
+                        p_vals = np.where(valid, 2.0 * _scipy_stats.t.sf(np.abs(t_stats), df=df_w), np.nan)
+                    except Exception:
+                        continue
+
+                    for k in range(K):
+                        p_val  = p_vals[k]
+                        t_stat = t_stats[k]
+                        if np.isnan(p_val):
+                            continue
+                        winner = i1 if t_stat > 0 else i2
+                        loser  = i2 if t_stat > 0 else i1
+                        letter = (col_letters or {}).get(loser, banner_cols[loser].letter)
                         if alpha95 and p_val < alpha95:
                             marks[codes[k]][winner].append(letter.upper())
                         elif alpha90 and p_val < alpha90:
@@ -1186,6 +1318,13 @@ def compute_table(
                     _p_scodes = sorted(col_choices.keys(), key=lambda x: int(x))
                     _choices_cfg_p = sc.get("choices", [])
 
+                    # Sig test for paired mode: each bc reads a different column.
+                    def _p_col_fn(bc) -> str | None:
+                        if bc.matrix_row_code is None:
+                            return None
+                        return row_col_map.get(bc.matrix_row_code) or f"{q_col}_r{bc.matrix_row_code}"
+                    _p_sigs = _compute_sig_paired_mode(_p_scodes, banner_cols, df, _p_col_fn, sig_config)
+
                     def _p_cnt_for_code(code: str) -> dict[int, int]:
                         _cnts: dict[int, int] = {}
                         for _i, _bc in enumerate(banner_cols):
@@ -1200,7 +1339,8 @@ def compute_table(
                     def _p_pct_row(code: str) -> StubRow:
                         cnts_ = _p_cnt_for_code(code)
                         pcts_ = {i: cnts_[i] / paired_bases[i] if paired_bases[i] else 0.0 for i in range(n)}
-                        return StubRow(label=_clabel(col_choices, code), row_type="percent", counts=cnts_, values=pcts_, code=code)
+                        sig_  = _p_sigs.get(code, {})
+                        return StubRow(label=_clabel(col_choices, code), row_type="percent", counts=cnts_, values=pcts_, sig_marks=sig_, code=code)
 
                     def _p_grp_row(grp_codes: list[str], label: str) -> StubRow:
                         g_cnts: dict[int, int]   = {i: sum(_p_cnt_for_code(c).get(i, 0) for c in grp_codes) for i in range(n)}

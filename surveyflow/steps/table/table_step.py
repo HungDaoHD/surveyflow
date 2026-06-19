@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 from surveyflow.core.base import Step
-from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows
+from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows, _letter
 from surveyflow.steps.table.table_generator import StubBlock, StubRow, RowGroupBlock, RankingBlock, compute_table
 
 logger = logging.getLogger(__name__)
@@ -572,6 +572,46 @@ class TableStep(Step):
                     col_map         = col_map,
                     groups          = bm.get("groups"),
                 )
+
+            mx_orient = cfg.get("matrix_orientation", "vertical")
+            if mx_orient == "horizontal":
+                stub_cfgs = cfg.get("stub", [])
+                mx_q = next(
+                    (sc["question"] for sc in stub_cfgs
+                     if sc.get("question") and
+                     q_pos_to_meta.get(sc["question"], {}).get("answer_type", "") in {"Matrix_SA", "Matrix_MA", "Matrix_NUM"}),
+                    None,
+                )
+                if mx_q:
+                    banner_cols = nest_banner_with_matrix_rows(
+                        base_columns    = banner_cols,
+                        matrix_question = mx_q,
+                        df              = df,
+                        q_pos_to_meta   = q_pos_to_meta,
+                        col_map         = col_map,
+                        groups          = cfg.get("matrix_rows"),  # Feature 1: show/hide/combine rows
+                    )
+                else:
+                    logger.warning(
+                        "%s — matrix_orientation='horizontal' nhưng không tìm thấy matrix question trong stub",
+                        tag,
+                    )
+
+            # Feature 6: sig_direction — "rows" (compare brands, default) | "columns" (compare demographics per brand)
+            sig_direction = cfg.get("sig_direction", "rows")
+            sig_config["sig_direction"] = sig_direction
+            if sig_direction == "columns":
+                brand_idx: dict[str, int] = {}
+                col_letters: dict[int, str] = {}
+                for _i, _bc in enumerate(banner_cols):
+                    if _bc.is_total or _bc.from_total:
+                        continue
+                    _key = _bc.matrix_row_code or ("|".join(_bc.matrix_row_codes) if _bc.matrix_row_codes else _bc.subgroup_label)
+                    _idx = brand_idx.get(_key, 0)
+                    col_letters[_i] = _letter(_idx)
+                    brand_idx[_key] = _idx + 1
+                sig_config["col_letters"] = col_letters
+
             logger.info("%s — banner: %d columns  (%.2fs)", tag, len(banner_cols),
                         time.perf_counter() - t0)
 
@@ -723,6 +763,7 @@ class TableStep(Step):
             mask           = pd.Series(dtype=bool),   # dummy — not used in render
             is_total       = d.get("is_total", False),
             level_labels   = d.get("level_labels", []),
+            from_total     = d.get("from_total", False),
         )
 
     @staticmethod

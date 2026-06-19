@@ -71,7 +71,7 @@ LANG = "vi"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
-TABLE_VERSION = "V1"   # hoặc đặt cứng, ví dụ: "v2"
+TABLE_VERSION = "V3"   # hoặc đặt cứng, ví dụ: "v2"
 
 # ── Fetch mode ──────────────────────────────────────────────
 # "rows"   = get_survey_definition + get_survey_rows

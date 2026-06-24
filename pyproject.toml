@@ -26,5 +26,3 @@ pptx = ["python-pptx>=0.6", "matplotlib>=3.7"]
 [tool.hatch.build.targets.wheel]
 packages = ["surveyflow"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"surveyflow/steps/appendix/chart_templates" = "surveyflow/steps/appendix/chart_templates"

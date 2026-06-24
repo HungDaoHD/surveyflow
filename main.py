@@ -48,11 +48,11 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-# SURVEY_ID   = 723450   # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8964" # str  — tên thư mục output
+SURVEY_ID   = 723450   # int  — survey ID từ QMe
+SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
-SURVEY_ID   = 723442               # int  — survey ID từ QMe
-SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
+# SURVEY_ID   = 723442               # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
 
 # SURVEY_ID   = 716642                  # int  — survey ID từ QMe
 # SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output
@@ -65,9 +65,10 @@ FETCH_MCP    = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
 RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
+GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
-LANG = "vi"           # "vi" = Tiếng Việt | "en" = English
+LANG = "en"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
@@ -202,6 +203,18 @@ def main():
         cli_argv += ["--datatable-config", str(datatable_cfg)]
 
     cli_main(cli_argv)
+
+    # ── Step 4: Generate PPT (optional) ───────────────────────────────────────
+    if GENERATE_PPTX and has_table:
+        chart_data_path = output_dir / version / "chart_data.json"
+        slides_path     = output_dir / version / "slides.pptx"
+        if chart_data_path.exists():
+            print(f"\n[pptx] Generating slides -> {slides_path}")
+            from tools.generate_pptx import generate as gen_pptx
+            gen_pptx(str(chart_data_path), str(slides_path))
+        else:
+            print(f"\n[pptx] chart_data.json not found at {chart_data_path} -- skipping")
+
     print("\nDone.")
 
 

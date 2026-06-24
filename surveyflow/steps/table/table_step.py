@@ -720,6 +720,33 @@ class TableStep(Step):
         context["datatable_path"] = output_path
         return context
 
+    def render_chart_data(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Write chart_data.json alongside datatable.xlsx.
+
+        Reads ``table_results`` from context (always populated after ``compute()``)
+        and exports a chart-friendly JSON for the PPT generator and other tools.
+        """
+        from surveyflow.steps.table.chart_data_exporter import export_chart_data
+
+        table_results = context.get("table_results")
+        if not table_results:
+            logger.warning("render_chart_data: no table_results in context, skipping.")
+            return context
+
+        out_dir     = Path(context.get("output_dir", "."))
+        survey_name = out_dir.parent.name
+        version     = context.get("version", "")
+
+        chart_data_path = export_chart_data(
+            table_results = table_results,
+            output_dir    = out_dir,
+            survey_name   = survey_name,
+            version       = version,
+        )
+        logger.info("chart_data.json → %s", chart_data_path)
+        context["chart_data_path"] = chart_data_path
+        return context
+
     # ── JSON → Python object reconstruction ───────────────────────────────────
 
     def _from_table_results(self, table_results: list[dict]) -> list[dict]:

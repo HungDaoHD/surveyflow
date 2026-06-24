@@ -65,3 +65,5 @@ publish note.txt
 *.toml
 debug_auth.py
 documents
+*.pptx
+*.xml

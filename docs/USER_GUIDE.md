@@ -11,11 +11,12 @@
 2. [Cài đặt một lần](#cài-đặt-một-lần)
 3. [Workflow A — Chạy survey lần đầu](#workflow-a--chạy-survey-lần-đầu)
 4. [Workflow B — Thay đổi bảng (đã có data)](#workflow-b--thay-đổi-bảng)
-5. [Field Check — Kiểm tra logic trả lời](#field-check)
-6. [Upload Excel template để thiết kế bảng](#excel-template)
-7. [Các yêu cầu thông thường](#các-yêu-cầu-thông-thường)
-8. [Cấu trúc folder output](#cấu-trúc-folder-output)
-9. [Câu hỏi thường gặp](#câu-hỏi-thường-gặp)
+5. [Workflow D — PPTX Chart Appendix](#workflow-d--pptx-chart-appendix)
+6. [Field Check — Kiểm tra logic trả lời](#field-check)
+7. [Upload Excel template để thiết kế bảng](#excel-template)
+8. [Các yêu cầu thông thường](#các-yêu-cầu-thông-thường)
+9. [Cấu trúc folder output](#cấu-trúc-folder-output)
+10. [Câu hỏi thường gặp](#câu-hỏi-thường-gặp)
 
 ---
 
@@ -129,7 +130,24 @@ Claude sẽ báo:
 Xác nhận → Claude chạy → file xuất ra:
 ```
 output/SURVEY_NAME/v1/datatable.xlsx
+output/SURVEY_NAME/v1/chart_data.json   ← tự động sinh, dùng cho PPTX appendix
 ```
+
+---
+
+### Bước 6 (tuỳ chọn): Tạo PPTX Chart Appendix
+
+Sau khi có `datatable.xlsx`, bạn có thể yêu cầu Claude tạo bộ slide biểu đồ:
+
+> *"Tạo appendix PPTX cho survey VN8963 v1"*  
+> *"Chạy slides"*
+
+Claude sẽ hỏi xác nhận rồi chạy:
+```
+output/SURVEY_NAME/v1/slides.pptx
+```
+
+Mỗi câu hỏi → 1 slide, biểu đồ **editable** trong PowerPoint, style khớp template công ty.
 
 ---
 
@@ -151,10 +169,11 @@ Khi đã có `datatable.xlsx` và muốn thay đổi, chỉ cần nói với Cla
 | "Nhóm Q13/Q14/Q17 theo brand" | Tạo row_group theo tên brand |
 | "Brand làm header, dùng Q17" | Thêm banner_matrix từ Q17 |
 | "Refresh data / fetch lại" | Tải data mới từ QMe, chạy lại toàn bộ |
+| "Tạo appendix PPTX / chạy slides" | Tạo `slides.pptx` từ `chart_data.json` (Workflow D) |
 
 ---
 
-## Field Check
+## Field Check <a name="field-check"></a>
 
 Field Check kiểm tra **logic trả lời** của từng respondent — phát hiện các lỗi như:
 
@@ -384,11 +403,16 @@ output/
     │   ├── quality_report.json
     │   └── flagged_profiles.csv
     ├── v1/
-    │   └── datatable.xlsx      ← Bảng version 1
+    │   ├── datatable.xlsx      ← Bảng version 1
+    │   ├── chart_data.json     ← Tự sinh kèm datatable.xlsx
+    │   └── slides.pptx         ← PPTX appendix (nếu đã tạo)
     ├── v2/
-    │   └── datatable.xlsx      ← Sau khi thay đổi
+    │   ├── datatable.xlsx      ← Sau khi thay đổi
+    │   ├── chart_data.json
+    │   └── slides.pptx
     └── v3/
-        └── datatable.xlsx
+        ├── datatable.xlsx
+        └── chart_data.json
 ```
 
 ---

@@ -271,6 +271,7 @@ bật / tắt sig test
 chỉ giữ sheet Percentage
 xuất tiếng Anh
 tải lại data mới
+tạo appendix PPTX / chạy slides
 file kết quả ở đâu?
 ```
 
@@ -283,9 +284,15 @@ Tất cả file nằm trong thư mục `output/` trong cùng thư mục với Cl
 ```
 output/
 └── VN8966/
-    ├── v1/datatable.xlsx      ← Bảng lần đầu
-    ├── v2/datatable.xlsx      ← Sau lần chỉnh đầu tiên
-    ├── v3/datatable.xlsx      ← ...
+    ├── v1/
+    │   ├── datatable.xlsx         ← Bảng lần đầu
+    │   ├── chart_data.json        ← Tự sinh kèm datatable.xlsx
+    │   └── slides.pptx            ← PPTX appendix (nếu đã tạo)
+    ├── v2/
+    │   ├── datatable.xlsx         ← Sau lần chỉnh đầu tiên
+    │   ├── chart_data.json
+    │   └── slides.pptx
+    ├── v3/datatable.xlsx          ← ...
     └── quality/
         └── flagged_profiles.csv   ← Danh sách người có vấn đề (nếu đã kiểm tra)
 ```

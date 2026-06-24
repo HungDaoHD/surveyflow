@@ -152,6 +152,8 @@ class Pipeline:
             if not cfg.skip_render:
                 logger.info("── Step 2: Table — render xlsx")
                 context = table_step.render_xlsx(context)
+                logger.info("── Step 2: Table — render chart_data")
+                context = table_step.render_chart_data(context)
 
         logger.info("Pipeline complete.")
         return context

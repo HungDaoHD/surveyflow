@@ -67,3 +67,5 @@ debug_auth.py
 documents
 *.pptx
 *.xml
+# Allow bundled chart templates inside the package
+!surveyflow/steps/appendix/chart_templates/*.xml

@@ -41,7 +41,7 @@ class AppendixStep(Step):
 
         logger.info("AppendixStep: generating slides -> %s", slides_path)
         try:
-            from surveyflow.generate_pptx import generate
+            from surveyflow.steps.appendix.generate_pptx import generate
         except ImportError:
             raise ImportError(
                 "python-pptx is required for AppendixStep. "

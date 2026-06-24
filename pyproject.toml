@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "surveyflow"
-version = "0.5.4"
+version = "0.5.5"
 description = "Survey data pipeline: rawdata.csv + metadata.json + datatable.xlsx with sig testing"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -16,7 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
-surveyflow-run = "surveyflow.cli:main"
+surveyflow-run  = "surveyflow.cli:main"
+surveyflow-pptx = "surveyflow.generate_pptx:main"
 
 [project.optional-dependencies]
 dev  = ["pytest>=7.0", "pytest-cov"]
@@ -24,3 +25,6 @@ pptx = ["python-pptx>=0.6", "matplotlib>=3.7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["surveyflow"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"surveyflow/chart_templates" = "surveyflow/chart_templates"

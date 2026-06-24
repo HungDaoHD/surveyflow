@@ -659,7 +659,7 @@ cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) 
 > "Tôi sẽ tạo appendix PPTX từ chart_data.json. Bạn xác nhận không?"
 
 ```bash
-python tools/generate_pptx.py \
+surveyflow-pptx \
   output/SURVEY_NAME/v1/chart_data.json \
   output/SURVEY_NAME/v1/slides.pptx
 ```
@@ -672,12 +672,13 @@ Tuỳ chọn: `--table N` (chỉ 1 bảng), `--start-page N` (số trang bắt �
 - `bar_vertical` (SA >5) → cột dọc Total + các cột breakdown bên phải
 
 > ⚠️ **Self-contained — KHÔNG cần `documents/temp.pptx` lúc chạy.**
-> Style chart nằm sẵn trong `tools/chart_templates/{bar,col,donut,stacked}.xml`.
+> Style chart nằm sẵn trong `surveyflow/chart_templates/{bar,col,donut,stacked}.xml`.
 > Muốn đổi màu / font chart: sửa `documents/temp.pptx` trong PowerPoint →
 > `python tools/extract_chart_templates.py documents/temp.pptx` → chạy lại generate.
 
 > ⚠️ **NEVER recreate or rewrite `tools/generate_pptx.py` hoặc
 > `tools/extract_chart_templates.py`** — luôn có sẵn trong project.
+> CLI command sau `pip install surveyflow`: `surveyflow-pptx` (thay thế `python tools/generate_pptx.py`).
 
 ---
 
@@ -737,7 +738,7 @@ output/SURVEY_NAME/
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
-| "tạo appendix PPTX / chạy slides" | Workflow D: `python tools/generate_pptx.py output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
 
 ---
 

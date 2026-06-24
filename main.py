@@ -210,7 +210,7 @@ def main():
         slides_path     = output_dir / version / "slides.pptx"
         if chart_data_path.exists():
             print(f"\n[pptx] Generating slides -> {slides_path}")
-            from tools.generate_pptx import generate as gen_pptx
+            from surveyflow.steps.appendix.generate_pptx import generate as gen_pptx
             gen_pptx(str(chart_data_path), str(slides_path))
         else:
             print(f"\n[pptx] chart_data.json not found at {chart_data_path} -- skipping")

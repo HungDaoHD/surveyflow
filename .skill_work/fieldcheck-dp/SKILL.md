@@ -399,20 +399,29 @@ Bạn muốn thay đổi gì không? (thêm banner, thêm câu, đổi ngôn ng�
 ### Step 6 — PPTX Chart Appendix (tuỳ chọn)
 
 Sau khi pipeline chạy xong, `chart_data.json` đã có sẵn cạnh `datatable.xlsx`.
-Khi user nói *"tạo appendix"*, *"chạy slides"*, *"tạo PPTX"* → xác nhận rồi chạy:
+Khi user nói *"tạo appendix"*, *"chạy slides"*, *"tạo PPTX"* → xác nhận rồi chạy.
 
+**Cách 1 — kèm pipeline** (table + appendix trong 1 lệnh):
 ```bash
-python tools/generate_pptx.py \
+python run_pipeline.py \
+  --output-dir output/SURVEY_NAME \
+  --version    vX \
+  --appendix
+```
+
+**Cách 2 — riêng** (sau khi đã có chart_data.json):
+```bash
+surveyflow-pptx \
   output/SURVEY_NAME/vX/chart_data.json \
   output/SURVEY_NAME/vX/slides.pptx
 ```
 
-Tuỳ chọn:
+Tuỳ chọn `surveyflow-pptx`:
 - `--table N` — chỉ chạy bảng thứ N (0-indexed)
 - `--start-page N` — bắt đầu đánh số trang từ N
 
-> ⚠️ **NEVER recreate or rewrite `tools/generate_pptx.py`** — it is always available.  
-> Self-contained — không cần `documents/temp.pptx`. Style từ `tools/chart_templates/`.
+> ⚠️ Self-contained — không cần `documents/temp.pptx`. Style từ `surveyflow/steps/appendix/chart_templates/`.  
+> ⚠️ **NEVER recreate or rewrite `surveyflow/steps/appendix/generate_pptx.py`** — nằm sẵn trong package.
 
 After running:
 ```
@@ -431,8 +440,17 @@ Khi user muốn tạo PPTX từ kết quả đã có (không phải trong Workfl
 **Confirm trước khi chạy:**
 > *"Tôi sẽ tạo PPTX appendix từ `output/SURVEY_NAME/vX/chart_data.json`. Bạn xác nhận không?"*
 
+**Cách 1 — chạy lại pipeline kèm appendix:**
 ```bash
-python tools/generate_pptx.py \
+python run_pipeline.py \
+  --output-dir output/SURVEY_NAME \
+  --version    vX \
+  --appendix
+```
+
+**Cách 2 — chạy riêng từ chart_data.json đã có:**
+```bash
+surveyflow-pptx \
   output/SURVEY_NAME/vX/chart_data.json \
   output/SURVEY_NAME/vX/slides.pptx
 ```
@@ -443,8 +461,9 @@ python tools/generate_pptx.py \
 - `bar_horizontal` → bar ngang Total + cột breakdown (MA)
 
 > ⚠️ Self-contained — không cần `documents/temp.pptx`.  
-> Style: `tools/chart_templates/{bar,col,donut,stacked}.xml`  
-> ⚠️ **NEVER recreate or rewrite `tools/generate_pptx.py` hoặc `tools/extract_chart_templates.py`**
+> Style: `surveyflow/steps/appendix/chart_templates/{bar,col,donut,stacked}.xml`  
+> ⚠️ **NEVER recreate or rewrite `surveyflow/steps/appendix/generate_pptx.py` hoặc `tools/extract_chart_templates.py`**  
+> CLI command sau `pip install surveyflow`: `surveyflow-pptx`
 
 ---
 
@@ -715,7 +734,7 @@ python run_pipeline.py --output-dir output/VN8966 --version v1 --lang vi   # Vie
 | "chỉ hiện 4 brands, nhóm others" | Add `matrix_rows` với `row_code` riêng + `row_codes` nhóm |
 | "ẩn brand X" | Xoá row_code đó khỏi `matrix_rows` |
 | "refresh data / lấy data mới" | Re-fetch → re-run with `--force-ingestion` |
-| "tạo appendix PPTX / chạy slides" | Workflow D: `python tools/generate_pptx.py output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
 | "chạy quality check" | Run `--run-quality`, present summary |
 | "xem chi tiết câu Q5" | Filter violations by question, show table |
 | "profile nào bị lỗi nhiều nhất" | Group by profile_id, show top 10 |

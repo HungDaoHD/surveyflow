@@ -142,7 +142,7 @@ class Pipeline:
 
         # ── Step 3: Table (optional) ───────────────────────────────────────
         if cfg.datatable_config is not None:
-            logger.info("── Step 2: Table — compute")
+            logger.info("── Step 3: Table — compute")
             context["df"]               = context["rawdata"]
             context["datatable_config"] = self._load_datatable_config(
                 cfg.datatable_config
@@ -150,10 +150,22 @@ class Pipeline:
             table_step = TableStep()
             context = table_step.compute(context)
             if not cfg.skip_render:
-                logger.info("── Step 2: Table — render xlsx")
+                logger.info("── Step 3: Table — render xlsx")
                 context = table_step.render_xlsx(context)
-                logger.info("── Step 2: Table — render chart_data")
+                logger.info("── Step 3: Table — render chart_data")
                 context = table_step.render_chart_data(context)
+
+        # ── Step 4: Appendix (optional) ────────────────────────────────────
+        if cfg.run_appendix:
+            if "chart_data_path" not in context:
+                logger.warning(
+                    "AppendixStep skipped: chart_data_path not in context "
+                    "(table step may have been skipped or had no output)."
+                )
+            else:
+                from surveyflow.steps.appendix.appendix_step import AppendixStep
+                logger.info("── Step 4: Appendix — generate slides.pptx")
+                context = AppendixStep().run(context)
 
         logger.info("Pipeline complete.")
         return context

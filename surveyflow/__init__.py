@@ -7,6 +7,7 @@ from surveyflow.steps.fetch.fetch_step import FetchStep
 from surveyflow.steps.ingestion.ingestion_step import IngestionStep
 from surveyflow.steps.table.table_step import TableStep
 from surveyflow.steps.quality.quality_step import QualityStep
+from surveyflow.steps.appendix.appendix_step import AppendixStep
 
-__all__ = ["Pipeline", "PipelineConfig", "QMeClient", "FetchStep", "IngestionStep", "TableStep", "QualityStep"]
-__version__ = "0.5.5"
+__all__ = ["Pipeline", "PipelineConfig", "QMeClient", "FetchStep", "IngestionStep", "TableStep", "QualityStep", "AppendixStep"]
+__version__ = "0.5.6"

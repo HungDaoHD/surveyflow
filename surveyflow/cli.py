@@ -168,6 +168,12 @@ def main(argv: list[str] | None = None) -> None:
         default="vi",
         help="Display language for table labels: 'vi' (default) or 'en'.",
     )
+    parser.add_argument(
+        "--appendix",
+        action="store_true",
+        help="Generate slides.pptx chart appendix after table step "
+             "(requires python-pptx: pip install python-pptx).",
+    )
     args = parser.parse_args(argv)
 
     output_dir = Path(args.output_dir)
@@ -225,6 +231,7 @@ def main(argv: list[str] | None = None) -> None:
         version          = args.version,
         datatable_config = datatable_config,
         run_quality      = args.run_quality,
+        run_appendix     = args.appendix,
         lang             = args.lang,
         metadata_only    = args.metadata_only,
     )).run()
@@ -246,6 +253,8 @@ def main(argv: list[str] | None = None) -> None:
               f"contradiction={s.get('contradiction',0)}")
     if "datatable_path" in result:
         print(f"  datatable: {result['datatable_path']}")
+    if "slides_path" in result:
+        print(f"  slides   : {result['slides_path']}")
     print(f"  rows     : {result['rawdata'].shape[0]}")
     print(f"  version  : {result['version']}")
 

@@ -658,13 +658,22 @@ cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) 
 **Confirm trước khi chạy** (giống chạy pipeline):
 > "Tôi sẽ tạo appendix PPTX từ chart_data.json. Bạn xác nhận không?"
 
+**Cách 1 — chạy kèm pipeline** (table + appendix trong 1 lệnh):
+```bash
+python run_pipeline.py \
+  --output-dir output/SURVEY_NAME \
+  --version    v1 \
+  --appendix
+```
+
+**Cách 2 — chạy riêng** (sau khi đã có chart_data.json):
 ```bash
 surveyflow-pptx \
   output/SURVEY_NAME/v1/chart_data.json \
   output/SURVEY_NAME/v1/slides.pptx
 ```
 
-Tuỳ chọn: `--table N` (chỉ 1 bảng), `--start-page N` (số trang bắt đầu).
+Tuỳ chọn `surveyflow-pptx`: `--table N` (chỉ 1 bảng), `--start-page N` (số trang bắt đầu).
 
 **Chart type tự suy ra** từ `chart_data.json`:
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải

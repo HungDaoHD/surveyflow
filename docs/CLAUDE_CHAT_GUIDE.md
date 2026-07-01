@@ -11,7 +11,7 @@ Bạn chỉ cần nhắn tên survey. Claude sẽ tự động:
 1. Tìm survey trên Fieldcheck / QMe
 2. Tải toàn bộ câu trả lời về
 3. Kiểm tra xem có respondent nào trả lời sai logic không *(tuỳ chọn)*
-4. Mở giao diện để bạn chọn cột và hàng cho bảng
+4. Hỏi bạn chọn cột và hàng cho bảng
 5. Xuất file **datatable.xlsx** hoàn chỉnh
 
 Mỗi lần thay đổi bảng, chỉ cần nhắn tin — Claude cập nhật và xuất file mới, **không xoá file cũ**.
@@ -26,7 +26,7 @@ Trước khi dùng lần đầu, cần cài 2 thứ. Nhờ team tech hỗ trợ 
 
 ### 1. Skill `fieldcheck-dp`
 
-**Skill là gì?** Là bộ hướng dẫn nạp vào Claude, giúp Claude hiểu đúng quy trình xử lý survey của team mình — từ cách tải data, kiểm tra chất lượng, đến cách tạo bảng.
+**Skill là gì?** Là bộ hướng dẫn nạp vào Claude, giúp Claude hiểu đúng quy trình xử lý survey của team — từ cách tải data, kiểm tra chất lượng, đến cách tạo bảng.
 
 **Cách cài:**
 1. Mở **Claude Code** (ứng dụng desktop)
@@ -73,7 +73,7 @@ Claude hiển thị tiến trình để bạn theo dõi:
 ✅ 1. Tìm survey       — tìm thấy: VN8966 LIPOVITAN
 ✅ 2. Tải data         — 450 responses
 ✅ 3. Xử lý data       — xong
-⏳ 4. Chọn bảng       — đang mở giao diện chọn...
+⏳ 4. Chọn bảng       — đang hỏi...
 ⬜ 5. Xuất file Excel
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -85,7 +85,7 @@ Claude hiển thị tiến trình để bạn theo dõi:
 Bạn không cần làm gì trong 3 bước đầu. Claude tự tìm survey, tải data và xử lý.
 
 **Nếu survey đã chạy trước đây**, Claude hỏi:
-> *"Data của VN8966 đã có sẵn (tải ngày 10/06). Dùng data cũ hay tải lại từ QMe?"*
+> *"Data của VN8966 đã có sẵn. Dùng data cũ hay tải lại từ QMe?"*
 
 - Nhắn **"dùng cũ"** hoặc **"ok"** → bỏ qua bước tải, nhanh hơn
 - Nhắn **"tải lại"** → tải data mới nhất từ QMe
@@ -125,8 +125,6 @@ Loại vấn đề phát hiện:
 Câu có vấn đề nhiều nhất:
   Q15 (Mức độ sử dụng) — 6 người
   Q8  (Loại sản phẩm)  — 3 người
-
-📄 File chi tiết đã lưu vào thư mục output/VN8966/quality/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -146,32 +144,49 @@ Câu có vấn đề nhiều nhất:
 
 ---
 
-## Bước 4: Chọn bảng — Datatable Builder
+## Bước 4: Chọn bảng — Claude hỏi trong chat
 
-Claude mở giao diện **Datatable Builder** ngay trong cửa sổ chat.
+Claude hỏi lần lượt **3 câu** ngay trong chat. Trả lời xong mỗi câu, Claude mới hỏi câu tiếp.
 
-### Làm theo 4 bước trong Builder:
+### Câu 1 — Banner (cột tiêu đề ngang)
 
-**Bước 1 — Cài đặt chung**
-- Đặt tên bảng (ví dụ: *VN8966 - Data Table*)
-- Chọn loại output: Percentage + Count / Chỉ Percentage / Chỉ Count
+Claude liệt kê các câu phân nhóm respondents từ survey, ví dụ:
+> *"Banner gồm những câu nào? (Total luôn có sẵn)*  
+> *S3 (Giới tính), S5 (Độ tuổi), S7 (Thu nhập)*  
+> *Nhập số câu cách nhau bằng dấu phẩy:"*
 
-**Bước 2 — Banner** *(cột tiêu đề ngang)*
-- Danh sách câu hỏi phân nhóm respondents hiện ra
-- Tick chọn câu muốn dùng, ví dụ: Giới tính, Độ tuổi, Khu vực
+→ Trả lời ví dụ: `S3, S5` hoặc `S3, S5, S7`
 
-**Bước 3 — Stub** *(câu hỏi theo hàng)*
-- Danh sách tất cả câu hỏi của survey hiện ra
-- Tick chọn câu muốn xem kết quả, hoặc tick **"Chọn tất cả"**
+### Câu 2 — Stub (câu hỏi theo hàng)
 
-**Bước 4 — Xác nhận**
-- Xem lại toàn bộ cấu hình
-- Nhấn **"Tạo cấu hình bảng"**
-- Nhấn **"Sao chép"** → dán vào ô chat → gửi
+Claude liệt kê tất cả câu hỏi của survey:
+> *"Stub gồm những câu nào?*  
+> *- Nhập "all" để lấy tất cả*  
+> *- Hoặc nhập: Q1, Q5, Q8..."*
 
-Claude nhận được cấu hình, lưu lại và tự chạy.
+→ Trả lời `all` hoặc liệt kê cụ thể
 
-> 💡 Builder chỉ tạo bảng cơ bản. Các tính năng nâng cao như Sig test, Top 2 Box, Mean, Brand header… bạn yêu cầu thêm sau khi đã có file Excel.
+### Câu 3 — Tiêu đề bảng
+
+> *"Tiêu đề bảng? (Enter để dùng mặc định: VN8966 - Data Table)"*
+
+→ Nhập tên hoặc nhấn Enter để dùng mặc định
+
+Sau khi trả lời 3 câu, Claude lưu cấu hình và chuẩn bị chạy.
+
+> 💡 Claude mặc định tạo 2 sheet: **Count** và **Percentage**. Sig test chỉ thêm khi bạn yêu cầu (xem phần "Thay đổi bảng sau khi chạy").
+
+---
+
+## Bước 4b: Chọn ngôn ngữ output *(nếu survey đa ngôn ngữ)*
+
+Nếu survey có nhiều ngôn ngữ, Claude hỏi thêm:
+> *"Survey này có 2 ngôn ngữ: vi (tiếng Việt) và en (tiếng Anh).*  
+> *Bạn muốn xuất bảng bằng ngôn ngữ nào?"*
+
+→ Nhắn `vi` hoặc `en`
+
+Nếu survey chỉ có 1 ngôn ngữ, bước này được bỏ qua tự động.
 
 ---
 
@@ -180,22 +195,38 @@ Claude nhận được cấu hình, lưu lại và tự chạy.
 Claude báo khi xong:
 
 ```
-✅ Xong! File Excel đã sẵn sàng.
+✅ Datatable xong!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📁 output/VN8966/v1/datatable.xlsx
-📊 Sheets: General - Pct | General - Count
+📊 Sheets: General - Count  |  General - Pct
 👥 450 respondents
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Bạn muốn thay đổi gì không?
+Bạn muốn thay đổi gì không? (thêm banner, thêm câu, bật sig test, tạo PPTX...)
 ```
 
 Mở thư mục `output/VN8966/v1/` để lấy file.
 
 ---
 
+## Bước 6 (tuỳ chọn): Tạo PPTX Chart Appendix
+
+Sau khi có bảng Excel, bạn có thể yêu cầu Claude tạo bộ slide biểu đồ:
+
+> *"Tạo appendix PPTX"*  
+> *"Chạy slides"*
+
+Claude sẽ hỏi xác nhận rồi tạo file:
+```
+output/VN8966/v1/slides.pptx
+```
+
+Mỗi câu hỏi → 1 slide, biểu đồ **editable** trong PowerPoint, style khớp template công ty.
+
+---
+
 ## Thay đổi bảng sau khi chạy
 
-Chỉ cần nhắn — không cần mở Builder lại. Claude sửa và tạo file mới *(v2, v3…)*, **file cũ vẫn còn nguyên**.
+Chỉ cần nhắn — Claude sửa và tạo file mới *(v2, v3…)*. **File cũ vẫn còn nguyên.**
 
 ### Cột tiêu đề (banner)
 
@@ -206,7 +237,7 @@ Chỉ cần nhắn — không cần mở Builder lại. Claude sửa và tạo f
 | "Thêm cột Total cho từng khu vực" | Thêm tổng trước mỗi nhóm Area |
 | "Dùng Brand làm cột, tất cả brands từ Q17" | Thêm Brand matrix header |
 
-### Câu hỏi trong bảng (stub)
+### Câu hỏi trong bảng (stub) và thống kê
 
 | Bạn nhắn | Claude làm |
 |---|---|
@@ -269,7 +300,7 @@ thêm điểm trung bình cho [câu]
 thêm Top 2 Box cho [câu]
 bật / tắt sig test
 chỉ giữ sheet Percentage
-xuất tiếng Anh
+xuất tiếng Anh / xuất tiếng Việt
 tải lại data mới
 tạo appendix PPTX / chạy slides
 file kết quả ở đâu?
@@ -290,21 +321,16 @@ output/
     │   └── slides.pptx            ← PPTX appendix (nếu đã tạo)
     ├── v2/
     │   ├── datatable.xlsx         ← Sau lần chỉnh đầu tiên
-    │   ├── chart_data.json
-    │   └── slides.pptx
-    ├── v3/datatable.xlsx          ← ...
+    │   └── ...
     └── quality/
         └── flagged_profiles.csv   ← Danh sách người có vấn đề (nếu đã kiểm tra)
 ```
 
-Mỗi lần thay đổi bảng → Claude tạo thêm một thư mục mới (v2, v3…). **Các file cũ không bị xoá.**
+Mỗi lần thay đổi bảng → Claude tạo thêm thư mục mới (v2, v3…). **Các file cũ không bị xoá.**
 
 ---
 
 ## Câu hỏi thường gặp
-
-**Tôi không thấy Builder hiện ra, phải làm gì?**  
-→ Thử nhắn lại: *"mở Datatable Builder"* hoặc *"cho tôi chọn cột và hàng"*.
 
 **File Excel nằm ở đâu?**  
 → Nhắn Claude: *"file ở đâu?"* — Claude sẽ chỉ đường dẫn chính xác.
@@ -325,4 +351,10 @@ Mỗi lần thay đổi bảng → Claude tạo thêm một thư mục mới (v2
 → Không. Claude luôn báo trước khi tải lại data hoặc ghi đè file quan trọng. Với thay đổi bảng thông thường, Claude sửa thẳng và thông báo kết quả (không hỏi từng bước nhỏ để tránh mất thời gian).
 
 **Muốn bảng tiếng Anh?**  
-→ Nhắn: *"xuất bảng tiếng Anh"* trước khi chạy hoặc bất cứ lúc nào — Claude chạy lại với nhãn tiếng Anh.
+→ Nhắn: *"xuất bảng tiếng Anh"* bất cứ lúc nào — Claude chạy lại với nhãn tiếng Anh.
+
+**Muốn thêm sig test?**  
+→ Nhắn: *"bật sig test"* — Claude thêm sheet Sig test và chạy lại.
+
+**Tôi muốn xem cấu hình bảng hiện tại thì làm sao?**  
+→ Nhắn: *"cho tôi xem config bảng hiện tại"* — Claude tóm tắt banner, stub, và loại bảng đang dùng.

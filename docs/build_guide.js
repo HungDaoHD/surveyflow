@@ -373,39 +373,71 @@ const children = [
   ]),
   sp(),
 
-  // ─── 6. Datatable Builder ─────────────────────────────────────────────────
-  h1("Bước 4: Chọn bảng — Datatable Builder"),
-  para([r("Claude mở giao diện "), rb("Datatable Builder"), r(" ngay trong cửa sổ chat.")]),
+  // ─── 6. Chọn bảng ─────────────────────────────────────────────────────────
+  h1("Bước 4: Chọn bảng — Claude hỏi trong chat"),
+  para([r("Claude hỏi lần lượt "), rb("3 câu"), r(" ngay trong chat. Trả lời xong mỗi câu, Claude mới hỏi câu tiếp.")]),
   sp(),
 
-  h2("Làm theo 4 bước trong Builder"),
-
-  h3("Bước 1 — Cài đặt chung"),
-  bullet([r("Đặt tên bảng (ví dụ: "), ri("VN8966 - Data Table"), r(")")]),
-  bullet("Chọn loại output: Percentage + Count / Chỉ Percentage / Chỉ Count"),
+  h2("Câu 1 — Banner  (cột tiêu đề ngang)"),
+  para("Claude liệt kê các câu phân nhóm respondents từ survey, ví dụ:"),
+  sp(60),
+  callout(
+    [
+      [ri("\"Banner gồm những câu nào? (Total luôn có sẵn)")],
+      [ri("S3 (Giới tính), S5 (Độ tuổi), S7 (Thu nhập)")],
+      [ri("Nhập số câu cách nhau bằng dấu phẩy:\"")],
+    ],
+    BLUE_LIGHT, "🤖"
+  ),
   sp(80),
+  para([r("→ Trả lời ví dụ: "), mono("S3, S5"), r(" hoặc "), mono("S3, S5, S7")]),
+  sp(),
 
-  h3("Bước 2 — Banner  (cột tiêu đề ngang)"),
-  bullet("Danh sách câu hỏi phân nhóm respondents hiện ra"),
-  bullet("Tick chọn câu muốn dùng, ví dụ: Giới tính, Độ tuổi, Khu vực"),
+  h2("Câu 2 — Stub  (câu hỏi theo hàng)"),
+  para("Claude liệt kê tất cả câu hỏi của survey:"),
+  sp(60),
+  callout(
+    [
+      [ri("\"Stub gồm những câu nào?")],
+      [ri("- Nhập \"all\" để lấy tất cả")],
+      [ri("- Hoặc nhập: Q1, Q5, Q8...\"")],
+    ],
+    BLUE_LIGHT, "🤖"
+  ),
   sp(80),
+  para([r("→ Trả lời "), mono("all"), r(" hoặc liệt kê cụ thể")]),
+  sp(),
 
-  h3("Bước 3 — Stub  (câu hỏi theo hàng)"),
-  bullet("Danh sách tất cả câu hỏi của survey hiện ra"),
-  bullet([r("Tick chọn câu muốn xem kết quả, hoặc tick "), rb("\"Chọn tất cả\"")]),
+  h2("Câu 3 — Tiêu đề bảng"),
+  callout(
+    [[ri("\"Tiêu đề bảng? (Enter để dùng mặc định: VN8966 - Data Table)\"")]],
+    BLUE_LIGHT, "🤖"
+  ),
   sp(80),
-
-  h3("Bước 4 — Xác nhận"),
-  bullet("Xem lại toàn bộ cấu hình"),
-  bullet([r("Nhấn "), rb("\"Tạo cấu hình bảng\"")]),
-  bullet([r("Nhấn "), rb("\"Sao chép\""), r(" → dán vào ô chat → gửi")]),
+  para("→ Nhập tên hoặc nhấn Enter để dùng mặc định"),
   sp(80),
-  para("Claude nhận được cấu hình, lưu lại và tự chạy."),
+  para("Sau khi trả lời 3 câu, Claude lưu cấu hình và chuẩn bị chạy."),
   sp(80),
   callout(
-    ["Builder chỉ tạo bảng cơ bản. Các tính năng nâng cao như Sig test, Top 2 Box, Mean, Brand header… bạn yêu cầu thêm sau khi đã có file Excel."],
-    BLUE_LIGHT, "💡"
+    ["Claude mặc định tạo 2 sheet: Count và Percentage. Sig test chỉ thêm khi bạn yêu cầu."],
+    GREEN_BG, "💡"
   ),
+  sp(),
+
+  h1("Bước 4b: Chọn ngôn ngữ output  (nếu survey đa ngôn ngữ)"),
+  para("Nếu survey có nhiều ngôn ngữ, Claude hỏi thêm:"),
+  sp(60),
+  callout(
+    [
+      [ri("\"Survey này có 2 ngôn ngữ: vi (tiếng Việt) và en (tiếng Anh).")],
+      [ri("Bạn muốn xuất bảng bằng ngôn ngữ nào?\"")],
+    ],
+    BLUE_LIGHT, "🤖"
+  ),
+  sp(80),
+  para([r("→ Nhắn "), mono("vi"), r(" hoặc "), mono("en")]),
+  sp(80),
+  para([ri("Nếu survey chỉ có 1 ngôn ngữ, bước này được bỏ qua tự động.")]),
   sp(),
 
   // ─── 7. Kết quả ───────────────────────────────────────────────────────────
@@ -413,16 +445,30 @@ const children = [
   para("Claude báo khi xong:"),
   sp(60),
   codeBlock([
-    "✅ Xong! File Excel đã sẵn sàng.",
+    "✅ Datatable xong!",
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
     "📁 output/VN8966/v1/datatable.xlsx",
-    "📊 Sheets: General - Pct | General - Count",
+    "📊 Sheets: General - Count  |  General - Pct",
     "👥 450 respondents",
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    "Bạn muốn thay đổi gì không?",
+    "Bạn muốn thay đổi gì không? (thêm banner, bật sig test, tạo PPTX...)",
   ]),
   sp(80),
   para([r("Mở thư mục "), mono("output/VN8966/v1/"), r(" để lấy file.")]),
+  sp(),
+
+  // ─── 7b. PPTX ─────────────────────────────────────────────────────────────
+  h1("Bước 6 (tuỳ chọn): Tạo PPTX Chart Appendix"),
+  para("Sau khi có bảng Excel, bạn có thể yêu cầu Claude tạo bộ slide biểu đồ:"),
+  sp(60),
+  codeBlock([
+    "Tạo appendix PPTX",
+    "Chạy slides",
+  ]),
+  sp(80),
+  para([r("Claude hỏi xác nhận rồi tạo file "), mono("output/VN8966/v1/slides.pptx"), r(".")]),
+  sp(80),
+  para("Mỗi câu hỏi → 1 slide, biểu đồ editable trong PowerPoint, style khớp template công ty."),
   sp(),
 
   // ─── 8. Thay đổi bảng ─────────────────────────────────────────────────────
@@ -523,6 +569,7 @@ const children = [
     "chỉ giữ sheet Percentage",
     "xuất tiếng Anh / xuất tiếng Việt",
     "tải lại data mới",
+    "tạo appendix PPTX / chạy slides",
     "file kết quả ở đâu?",
   ]),
   sp(),
@@ -547,9 +594,6 @@ const children = [
   // ─── 12. FAQ ──────────────────────────────────────────────────────────────
   h1("Câu hỏi thường gặp"),
 
-  ...faq("Tôi không thấy Builder hiện ra, phải làm gì?",
-    [r("Thử nhắn lại: "), rb("\"mở Datatable Builder\""), r(" hoặc "), rb("\"cho tôi chọn cột và hàng\""), r(".")]),
-
   ...faq("File Excel nằm ở đâu?",
     [r("Nhắn Claude: "), rb("\"file ở đâu?\""), r(" — Claude sẽ chỉ đường dẫn chính xác.")]),
 
@@ -570,6 +614,12 @@ const children = [
 
   ...faq("Muốn bảng tiếng Anh?",
     [r("Nhắn: "), rb("\"xuất bảng tiếng Anh\""), r(" bất cứ lúc nào — Claude chạy lại với nhãn tiếng Anh.")]),
+
+  ...faq("Muốn thêm sig test?",
+    [r("Nhắn: "), rb("\"bật sig test\""), r(" — Claude thêm sheet Sig test và chạy lại. Mặc định bảng chỉ có Count và Percentage.")]),
+
+  ...faq("Tôi muốn xem cấu hình bảng hiện tại?",
+    [r("Nhắn: "), rb("\"cho tôi xem config bảng hiện tại\""), r(" — Claude tóm tắt banner, stub, và loại bảng đang dùng.")]),
 ];
 
 // ── Assemble & save ───────────────────────────────────────────────────────────

@@ -742,6 +742,7 @@ class TableStep(Step):
             output_dir    = out_dir,
             survey_name   = survey_name,
             version       = version,
+            metadata      = context.get("metadata"),
         )
         logger.info("chart_data.json → %s", chart_data_path)
         context["chart_data_path"] = chart_data_path

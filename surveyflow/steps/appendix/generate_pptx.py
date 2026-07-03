@@ -83,14 +83,23 @@ SECTION_H = Emu(292608)         # 0.32"
 SECTION_TO_CHART = Emu(228600)  # gap from section label top to chart top
 
 # ── Layout A: donut + 100%-stacked (slide2 in template) ──────────────────────
-DT_TOTAL_L, DT_TOTAL_T = Emu(548640),  Emu(1143000)
-DT_TOTAL_W              = Emu(4937760)
-DT_LEFT_L,  DT_LEFT_T   = Emu(548640),  Emu(1417320)
-DT_LEFT_W,  DT_LEFT_H   = Emu(5120640), Emu(4023360)
-DT_RIGHT_LBL_L, DT_RIGHT_LBL_T = Emu(5943600), Emu(1143000)
-DT_RIGHT_LBL_W                  = Emu(5760720)
-DT_RIGHT_L, DT_RIGHT_T = Emu(5897880), Emu(1417320)
-DT_RIGHT_W, DT_RIGHT_H = Emu(5852160), Emu(4114800)
+# Donut / breakdown split = 40% / 60% of the available content width.
+DT_MARGIN_L = Emu(548640)
+DT_GAP      = Emu(228600)
+DT_CONTENT_W = int(SW) - 2 * int(DT_MARGIN_L)
+_DT_AVAIL_W  = DT_CONTENT_W - int(DT_GAP)
+DT_LEFT_W  = Emu(_DT_AVAIL_W * 40 // 100)
+DT_RIGHT_W = Emu(_DT_AVAIL_W - int(DT_LEFT_W))
+DT_RIGHT_L = Emu(int(DT_MARGIN_L) + int(DT_LEFT_W) + int(DT_GAP))
+
+DT_TOTAL_L, DT_TOTAL_T = DT_MARGIN_L,  Emu(1143000)
+DT_TOTAL_W              = DT_LEFT_W
+DT_LEFT_L,  DT_LEFT_T   = DT_MARGIN_L,  Emu(1417320)
+DT_LEFT_H               = Emu(4023360)
+DT_RIGHT_LBL_L, DT_RIGHT_LBL_T = DT_RIGHT_L, Emu(1143000)
+DT_RIGHT_LBL_W                  = DT_RIGHT_W
+DT_RIGHT_T = Emu(1417320)
+DT_RIGHT_H = Emu(4114800)
 
 # ── Layout B: bar charts with N breakdown groups (slide1 in template) ─────────
 # Total 40% / Sub-group 60% of content width
@@ -107,6 +116,29 @@ BR_RIGHT_BOTTOM  = Emu(5715000)  # bottom of last right chart
 
 # Max breakdown groups shown per slide (Layout B right side)
 MAX_GROUPS_PER_SLIDE = 2
+
+# ── Layout C: MA bar_horizontal — Total + up to 2 breakdowns, 3 equal columns ─
+BH_GAP      = Emu(182880)   # gap between columns (0.2")
+BH_MARGIN_L = Emu(457200)   # left margin (mirrors right margin)
+BH_COL_W    = Emu((int(SW) - 2 * int(BH_MARGIN_L) - 2 * int(BH_GAP)) // 3)
+BH_LBL_T    = Emu(1097280)
+BH_CHART_T  = Emu(1371600)
+BH_CHART_H  = Emu(4297680)
+
+# Minimum Total-based percent for a choice to appear in an MA cross-tab chart —
+# only applied when the question has at least MA_CROSSTAB_MIN_ITEMS choices;
+# below that, cross-tab charts just hide 0% items like the Total chart does.
+MA_CROSSTAB_MIN_PCT   = 0.10
+MA_CROSSTAB_MIN_ITEMS = 6
+MA_CROSSTAB_NOTE = (
+    f"Note: cross-tab charts only show choices ≥{int(MA_CROSSTAB_MIN_PCT * 100)}% "
+    f"of Total (applies to questions with {MA_CROSSTAB_MIN_ITEMS}+ choices)."
+)
+
+
+def _bh_col_l(i: int) -> Emu:
+    """Left x-coordinate of the i-th (0-based) equal-width column in Layout C."""
+    return Emu(int(BH_MARGIN_L) + i * (int(BH_COL_W) + int(BH_GAP)))
 
 
 # ── Namespaces ────────────────────────────────────────────────────────────────
@@ -128,7 +160,40 @@ CHART_PALETTE = [
 ]
 
 # Donut per-slice palette (matches chart7 in temp.pptx)
-DONUT_PALETTE = ["4472C4", "95B3D7", "A6A6A6", "D99694", "C0504D"]
+# 12 distinct colors — avoids repeats for most SA questions (donut/stack now
+# used for all SA regardless of choice count, so >5-choice questions are
+# common, e.g. occupation, province, shopping-behavior typology).
+DONUT_PALETTE = [
+    "4472C4",  # blue
+    "95B3D7",  # light blue
+    "A6A6A6",  # gray
+    "D99694",  # pink/salmon
+    "C0504D",  # red
+    "9BBB59",  # green
+    "8064A2",  # purple
+    "F79646",  # orange
+    "4BACC6",  # teal
+    "808000",  # olive
+    "17375E",  # dark navy
+    "938953",  # brown/tan
+]
+
+# Above this label length, PowerPoint tends to render a chart's legend as a
+# single vertical column (one entry per row) instead of flowing multiple
+# entries per row. Confirmed via real PowerPoint rendering.
+_LEGEND_SINGLE_COL_LEN = 35
+
+
+def _likely_single_column_legend(labels) -> bool:
+    """Heuristic for whether a legend will render as a single vertical
+    column. Matters specifically for STACKED charts: confirmed via real
+    PowerPoint rendering that a single-column legend displays in the
+    REVERSE of series-add order (matching the visual top-to-bottom
+    stacking), while a multi-column (multiple entries per row) legend does
+    not reverse. There's no way to precisely predict PowerPoint's own text
+    layout from Python, so this uses a practical length threshold rather
+    than exact measurement."""
+    return any(len(lbl) > _LEGEND_SINGLE_COL_LEN for lbl in labels)
 
 
 # ── Font / text helpers ───────────────────────────────────────────────────────
@@ -198,6 +263,28 @@ def _add_q_label(slide, left, top, width, height,
     _run(f"  (N={base})", bold=True, color=C_QBASE)
 
 
+def _set_slide_note(slide, text: str) -> None:
+    """Write text into the slide's speaker-notes pane ('Click to add notes')."""
+    if not text:
+        return
+    slide.notes_slide.notes_text_frame.text = text
+
+
+def _question_type_label(q: dict) -> str:
+    """MA / SA-Ordinal / SA-Nominal, for the speaker-note type tag.
+
+    Driven directly by chart_data's `scale_class` (Claude-classified in
+    metadata.json, see CLAUDE.md Step 3c) — SA questions with
+    `scale_class == "Ordinal"` are SA-Ordinal, everything else (including
+    unclassified SA) is SA-Nominal."""
+    answer_type = q.get("answer_type", "")
+    if answer_type in ("MA", "Matrix_MA"):
+        return "MA"
+    if q.get("scale_class") == "Ordinal":
+        return "SA-Ordinal"
+    return "SA-Nominal"
+
+
 def _add_rect(slide, left, top, width, height, fill: RGBColor) -> None:
     shape = slide.shapes.add_shape(1, left, top, width, height)
     shape.fill.solid()
@@ -214,10 +301,32 @@ def _add_section_label(slide, left, top, width, text: str) -> None:
 # ── Label shortening ──────────────────────────────────────────────────────────
 
 def _shorten_label(text: str) -> str:
-    """Remove parenthetical clarifications from labels, e.g.
-    'By using ATM card (Internet banking)' → 'By using ATM card'"""
-    result = re.sub(r"\s*\([^)]*\)", "", text).strip()
-    return re.sub(r"\s{2,}", " ", result)
+    """Remove parenthetical clarifications and piping placeholders from labels, e.g.
+    'By using ATM card (Internet banking)' → 'By using ATM card'
+    'SHOW ANSWER OF Q13A : {QQ13A/792203/Selected}' → 'SHOW ANSWER OF Q13A :'"""
+    result = re.sub(r"\s*\([^)]*\)", "", text)
+    result = re.sub(r"\{[^{}]*\}", "", result).strip()
+    result = re.sub(r"\s{2,}", " ", result)
+    return re.sub(r"[\s:\-]+$", "", result)
+
+
+def _shorten_labels(items: list, label_key: str = "label") -> list:
+    """Shorten a list of choice labels via _shorten_label, but if two items
+    collapse to the same shortened text — e.g. two age-banded variants of
+    "Married, with children (youngest under 12)" / "...(youngest 12 or
+    older)" both become "Married, with children" once the parenthetical
+    (the only distinguishing part) is stripped — fall back to the original,
+    unshortened text for just those colliding items so choices stay
+    distinguishable in the chart/legend."""
+    originals = [item[label_key] for item in items]
+    shortened = [_shorten_label(t) for t in originals]
+    counts: dict = {}
+    for s in shortened:
+        counts[s] = counts.get(s, 0) + 1
+    return [
+        orig if counts[short] > 1 else short
+        for orig, short in zip(originals, shortened)
+    ]
 
 
 # ── Chart-template cloning ────────────────────────────────────────────────────
@@ -253,6 +362,47 @@ def _style_cat_axis(chartspace, *, font_pt: int = 8) -> None:
         defRPr.set("sz", sz_val)
 
 
+def _style_legend(chartspace, n_categories: int, *, base_pt: int = 9, min_pt: int = 6) -> None:
+    """Shrink legend text as the category count grows and force word-wrap, so
+    every visible entry stays fully readable.
+
+    PowerPoint's legend area has a fixed height/width — long entry text that
+    doesn't fit gets clipped instead of wrapping, and with many entries at the
+    template's default 9pt some can be dropped entirely rather than shrunk.
+    Enabling wrap + scaling the font down keeps every entry visible."""
+    font_pt = base_pt if n_categories <= 6 else max(min_pt, base_pt - (n_categories - 6))
+    sz_val = str(font_pt * 100)
+
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+    legend = chart_el.find(qn("c:legend"))
+    if legend is None:
+        return
+
+    txPr = legend.find(qn("c:txPr"))
+    if txPr is None:
+        txPr = etree.SubElement(legend, qn("c:txPr"))
+
+    bodyPr = txPr.find(qn("a:bodyPr"))
+    if bodyPr is None:
+        bodyPr = etree.SubElement(txPr, qn("a:bodyPr"))
+    bodyPr.set("wrap", "square")
+    if txPr.find(qn("a:lstStyle")) is None:
+        etree.SubElement(txPr, qn("a:lstStyle"))
+
+    p = txPr.find(qn("a:p"))
+    if p is None:
+        p = etree.SubElement(txPr, qn("a:p"))
+    pPr = p.find(qn("a:pPr"))
+    if pPr is None:
+        pPr = etree.SubElement(p, qn("a:pPr"))
+    defRPr = pPr.find(qn("a:defRPr"))
+    if defRPr is None:
+        defRPr = etree.SubElement(pPr, qn("a:defRPr"))
+    defRPr.set("sz", sz_val)
+
+
 def _force_pct_labels(chartspace) -> None:
     """Force every data-label number format to 0"%" (values injected as 0-100)."""
     for dl in chartspace.iter(qn("c:dLbls")):
@@ -264,6 +414,61 @@ def _force_pct_labels(chartspace) -> None:
         nf.set("sourceLinked", "0")
 
 
+def _hide_zero_value_labels(chartspace) -> None:
+    """Delete the data label (on-chart % text / slice) for any point whose
+    value is 0, while leaving it in the category/legend cache untouched — so
+    the item still appears in the legend, just without a visible 0% slice."""
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+    plot_area = chart_el.find(qn("c:plotArea"))
+    if plot_area is None:
+        return
+    for ser in plot_area.iter(qn("c:ser")):
+        val_el = ser.find(qn("c:val"))
+        if val_el is None:
+            continue
+        numRef = val_el.find(qn("c:numRef"))
+        if numRef is None:
+            continue
+        cache = numRef.find(qn("c:numCache"))
+        if cache is None:
+            continue
+        zero_idxs = sorted(
+            int(pt.get("idx")) for pt in cache.findall(qn("c:pt"))
+            if float((pt.find(qn("c:v")).text or "0")) == 0
+        )
+        if not zero_idxs:
+            continue
+        dLbls = ser.find(qn("c:dLbls"))
+        if dLbls is None:
+            continue
+
+        # A dLbl per idx must be unique (CT_DLbl: idx, then either <delete> or
+        # layout/format children) — reuse the template's existing override for
+        # that idx instead of appending a second, conflicting one.
+        existing_by_idx = {}
+        for dLbl in dLbls.findall(qn("c:dLbl")):
+            idx_el = dLbl.find(qn("c:idx"))
+            if idx_el is not None:
+                existing_by_idx[int(idx_el.get("val"))] = dLbl
+
+        insert_at = 0
+        for idx in zero_idxs:
+            dLbl = existing_by_idx.get(idx)
+            if dLbl is not None:
+                for child in list(dLbl):
+                    if child.tag != qn("c:idx"):
+                        dLbl.remove(child)
+                etree.SubElement(dLbl, qn("c:delete")).set("val", "1")
+            else:
+                dLbl = etree.Element(qn("c:dLbl"))
+                etree.SubElement(dLbl, qn("c:idx")).set("val", str(idx))
+                etree.SubElement(dLbl, qn("c:delete")).set("val", "1")
+                dLbls.insert(insert_at, dLbl)
+                insert_at += 1
+
+
 def _remove_legend(chartspace) -> None:
     chart_el = chartspace.find(qn("c:chart"))
     if chart_el is None:
@@ -271,6 +476,130 @@ def _remove_legend(chartspace) -> None:
     legend = chart_el.find(qn("c:legend"))
     if legend is not None:
         chart_el.remove(legend)
+
+
+def _ensure_legend(chartspace, *, pos: str = "b") -> None:
+    """Add a <c:legend> if the template doesn't have one (the "bar" template
+    has none, since it's normally used single-series for the Total chart —
+    but a multi-series breakdown bar chart needs one to tell series apart).
+    No-op if a legend already exists."""
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+    if chart_el.find(qn("c:legend")) is not None:
+        return
+    legend = etree.Element(qn("c:legend"))
+    etree.SubElement(legend, qn("c:legendPos")).set("val", pos)
+    etree.SubElement(legend, qn("c:overlay")).set("val", "0")
+    txPr = etree.SubElement(legend, qn("c:txPr"))
+    etree.SubElement(txPr, qn("a:bodyPr"))
+    etree.SubElement(txPr, qn("a:lstStyle"))
+    p = etree.SubElement(txPr, qn("a:p"))
+    pPr = etree.SubElement(p, qn("a:pPr"))
+    defRPr = etree.SubElement(pPr, qn("a:defRPr"))
+    defRPr.set("sz", "900")
+    etree.SubElement(defRPr, qn("a:latin")).set("typeface", "Arial")
+    etree.SubElement(defRPr, qn("a:cs")).set("typeface", "Arial")
+    etree.SubElement(p, qn("a:endParaRPr")).set("lang", "en-US")
+
+    # CT_Chart schema order: ... plotArea, legend?, plotVisOnly?, ...
+    plot_area = chart_el.find(qn("c:plotArea"))
+    insert_at = list(chart_el).index(plot_area) + 1 if plot_area is not None else len(chart_el)
+    chart_el.insert(insert_at, legend)
+
+
+def _match_series_count(chartspace, n: int) -> None:
+    """Make the template's plot have exactly n <c:ser> elements before
+    replace_data() runs, by cloning/trimming the template's own series.
+
+    Root-cause fix for a PowerPoint quirk (confirmed via real PowerPoint
+    rendering): when replace_data() itself has to add/remove series because
+    the new data's series count differs from the template's fixed sample
+    count, the chart's LEGEND can render in a different order than the
+    series were added in — inconsistently, depending on the count. Matching
+    the series count ourselves beforehand means replace_data() only ever
+    updates existing series content (never adds/removes any), which renders
+    with the legend in the expected add order every time."""
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+    plot_area = chart_el.find(qn("c:plotArea"))
+    if plot_area is None:
+        return
+    parent = next((child for child in plot_area
+                    if child.find(qn("c:ser")) is not None), None)
+    if parent is None:
+        return
+    sers = parent.findall(qn("c:ser"))
+    if not sers or n <= 0:
+        return
+    if len(sers) < n:
+        template_ser = sers[-1]
+        while len(parent.findall(qn("c:ser"))) < n:
+            parent.append(copy.deepcopy(template_ser))
+    elif len(sers) > n:
+        for extra in parent.findall(qn("c:ser"))[n:]:
+            parent.remove(extra)
+    for i, ser in enumerate(parent.findall(qn("c:ser"))):
+        idx_el = ser.find(qn("c:idx"))
+        order_el = ser.find(qn("c:order"))
+        if idx_el is not None:
+            idx_el.set("val", str(i))
+        if order_el is not None:
+            order_el.set("val", str(i))
+
+
+def _match_point_dlbl_count(chartspace) -> None:
+    """Extend/trim a single-series chart's per-point <c:dLbl> overrides (e.g.
+    donut) to match the actual point count, cloning the last override's
+    formatting for any extra points.
+
+    Root-cause fix (confirmed via real PowerPoint rendering): the donut
+    template only ships per-point dLbl overrides for its original 5 sample
+    slices. Points beyond that (e.g. a 7-choice SA question, now that all SA
+    questions use the donut layout) have no override and fall back to the
+    series-level defaults — which rendered wrong (showed "0%" instead of the
+    real percentage) in real PowerPoint. Giving every point its own override,
+    cloned from the same template styling, fixes this for any point count."""
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+    plot_area = chart_el.find(qn("c:plotArea"))
+    if plot_area is None:
+        return
+    all_sers = [s for child in plot_area for s in child.findall(qn("c:ser"))]
+    if len(all_sers) != 1:
+        return
+    ser = all_sers[0]
+
+    val_el = ser.find(qn("c:val"))
+    n = 0
+    numRef = val_el.find(qn("c:numRef")) if val_el is not None else None
+    if numRef is not None:
+        cache = numRef.find(qn("c:numCache"))
+        if cache is not None:
+            n = len(cache.findall(qn("c:pt")))
+    if n == 0:
+        return
+
+    dLbls = ser.find(qn("c:dLbls"))
+    if dLbls is None:
+        return
+    dLbl_els = dLbls.findall(qn("c:dLbl"))
+    if not dLbl_els:
+        return
+
+    if len(dLbl_els) < n:
+        template_dLbl = dLbl_els[-1]
+        insert_pos = list(dLbls).index(template_dLbl) + 1
+        for i in range(len(dLbl_els), n):
+            new_dLbl = copy.deepcopy(template_dLbl)
+            new_dLbl.find(qn("c:idx")).set("val", str(i))
+            dLbls.insert(insert_pos, new_dLbl)
+            insert_pos += 1
+    elif len(dLbl_els) > n:
+        for extra in dLbl_els[n:]:
+            dLbls.remove(extra)
 
 
 def _spPr_solid(hex_color: str):
@@ -294,12 +623,16 @@ def _set_ser_spPr(ser, hex_color: str) -> None:
         ser.append(_spPr_solid(hex_color))
 
 
-def _apply_palette(chartspace, palette: list, *, per_point: bool = False) -> None:
+def _apply_palette(chartspace, palette: list, *, per_point: bool = False,
+                   series_colors: list | None = None) -> None:
     """Apply palette colors to chart series.
 
     per_point=False (bar/col):  single series → 1 color on the series itself.
     per_point=True  (donut):    single series → per-slice dPt colors.
-    multi-series (any):         one color per series via spPr.
+    multi-series (any):         one color per series via spPr — uses
+                                 `series_colors[i]` if given (so callers can
+                                 keep colors consistent with a paired chart),
+                                 otherwise falls back to `palette[i % len]`.
     """
     chart_el = chartspace.find(qn("c:chart"))
     if chart_el is None:
@@ -314,13 +647,14 @@ def _apply_palette(chartspace, palette: list, *, per_point: bool = False) -> Non
 
     if len(all_sers) > 1:
         for i, ser in enumerate(all_sers):
-            _set_ser_spPr(ser, palette[i % len(palette)])
+            color = series_colors[i] if series_colors else palette[i % len(palette)]
+            _set_ser_spPr(ser, color)
         return
 
     ser = all_sers[0]
     if not per_point:
         # Bar/col single series: uniform color
-        _set_ser_spPr(ser, palette[0])
+        _set_ser_spPr(ser, series_colors[0] if series_colors else palette[0])
     else:
         # Donut: color each slice individually via dPt
         for dPt in ser.findall(qn("c:dPt")):
@@ -350,7 +684,9 @@ def _apply_palette(chartspace, palette: list, *, per_point: bool = False) -> Non
 
 def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
                  *, drop_legend: bool = False, per_point: bool = False,
-                 palette: list | None = None, style_cat_labels: bool = False):
+                 palette: list | None = None, style_cat_labels: bool = False,
+                 cat_font_pt: int = 8, legend_n: int | None = None,
+                 hide_zero_labels: bool = False, series_colors: list | None = None):
     """Add a chart, replace its XML with a deep copy of the template chartSpace,
     then inject `chart_data` via replace_data() so template styling is kept."""
     gf = slide.shapes.add_chart(pptx_type, l, t, w, h, chart_data)
@@ -366,6 +702,7 @@ def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
 
     if drop_legend:
         _remove_legend(cs)
+    _match_series_count(cs, len(chart_data))
 
     cp._element = cs
     cp.__dict__.pop("chart", None)
@@ -374,14 +711,67 @@ def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
     cp.chart.replace_data(chart_data)
     _force_pct_labels(cp._element)
     if style_cat_labels:
-        _style_cat_axis(cp._element)
-    _apply_palette(cp._element, palette or CHART_PALETTE, per_point=per_point)
+        _style_cat_axis(cp._element, font_pt=cat_font_pt)
+    if legend_n is not None:
+        _ensure_legend(cp._element)
+        _style_legend(cp._element, legend_n)
+    if per_point:
+        _match_point_dlbl_count(cp._element)
+    if hide_zero_labels:
+        _hide_zero_value_labels(cp._element)
+    _apply_palette(cp._element, palette or CHART_PALETTE, per_point=per_point,
+                   series_colors=series_colors)
     return cp.chart
 
 
 def _v100(percents: dict, codes: list) -> list:
     """Fractions (0-1) to percentages (0-100) for the given choice codes."""
     return [round(percents.get(c, 0.0) * 100.0, 4) for c in codes]
+
+
+def _col_label_with_base(col: dict) -> str:
+    """Breakdown column label + its own base, e.g. 'Male (N=120)'."""
+    return f"{col.get('label', '')} (N={col.get('base', 0)})"
+
+
+def _sort_scale_desc(q: dict, choices: list) -> list:
+    """SA-Ordinal questions (`scale_class == "Ordinal"`, Claude-classified in
+    metadata.json — see CLAUDE.md Step 3c): sort choices highest scale point
+    to lowest. SA-Nominal questions are returned unchanged.
+
+    Which code is "highest" isn't always the max code value — e.g. a
+    frequency scale coded 1=Almost every day … 7=Less than once a month has
+    code 1 at the high-intensity end. `scale_high_code` (also
+    Claude-classified, see CLAUDE.md Step 3c) names the code at the high end
+    explicitly; sort direction is derived from whether that's the min or max
+    code. Defaults to "max code = high end" (descending by code) when
+    `scale_high_code` isn't set."""
+    if q.get("scale_class") != "Ordinal":
+        return choices
+    try:
+        codes = [int(c["code"]) for c in choices]
+    except (ValueError, TypeError):
+        return list(reversed(choices))
+    high_code = q.get("scale_high_code")
+    reverse = True
+    if high_code is not None:
+        try:
+            reverse = int(high_code) != min(codes)
+        except (ValueError, TypeError):
+            pass
+    return sorted(choices, key=lambda c: int(c["code"]), reverse=reverse)
+
+
+def _order_sa_choices(q: dict, choices: list) -> list:
+    """Order SA (donut_stacked) choices for both the donut and its paired
+    stacked breakdown chart, so the two always agree:
+
+    - SA-Ordinal: sort by scale order descending (see _sort_scale_desc).
+    - SA-Nominal: sort by Total percent descending."""
+    if q.get("scale_class") == "Ordinal":
+        return _sort_scale_desc(q, choices)
+    total_pct = q.get("total", {}).get("percents", {})
+    return sorted(choices, key=lambda c: total_pct.get(c["code"], 0), reverse=True)
 
 
 # ── Per-chart builders (each clones the matching template chart) ──────────────
@@ -394,7 +784,7 @@ def _build_total_bar(slide, q, tmpl, l, t, w, h) -> None:
     if not choices:
         return
     codes = [c["code"] for c in choices]
-    labels = [_shorten_label(c["label"]) for c in choices]
+    labels = _shorten_labels(choices)
     order = sorted(range(len(codes)), key=lambda i: pcts.get(codes[i], 0))
     labels = [labels[i] for i in order]
     codes  = [codes[i]  for i in order]
@@ -405,14 +795,17 @@ def _build_total_bar(slide, q, tmpl, l, t, w, h) -> None:
 
 
 def _build_total_col(slide, q, tmpl, l, t, w, h) -> None:
-    """Vertical column, single series, natural order. Hides 0% items."""
+    """Vertical column, single series. Hides 0% items. SA-Likert questions
+    (scale detected) sort descending by scale point; everything else keeps
+    natural order."""
     choices = q["choices"]
     pcts = q.get("total", {}).get("percents", {})
     choices = [c for c in choices if pcts.get(c["code"], 0) > 0]
     if not choices:
         return
+    choices = _sort_scale_desc(q, choices)
     codes  = [c["code"] for c in choices]
-    labels = [_shorten_label(c["label"]) for c in choices]
+    labels = _shorten_labels(choices)
     cd = CategoryChartData()
     cd.categories = labels
     cd.add_series("Total", _v100(pcts, codes))
@@ -420,29 +813,53 @@ def _build_total_col(slide, q, tmpl, l, t, w, h) -> None:
                  drop_legend=True)
 
 
-def _build_breakdown_col(slide, q, group, tmpl, l, t, w, h, *,
-                         sort_desc: bool = False) -> None:
-    """Vertical clustered columns — one series per breakdown column. Hides 0% items."""
+def _build_breakdown_col(slide, q, group, tmpl, l, t, w, h) -> None:
+    """Vertical clustered columns — one series per breakdown column. Hides 0%
+    items. SA-Likert questions (scale detected) sort descending by scale
+    point, matching the Total chart; everything else keeps natural order."""
     choices = q["choices"]
     cols = group["columns"]
     choices = [c for c in choices
                if any(col.get("percents", {}).get(c["code"], 0) > 0 for col in cols)]
     if not choices:
         return
+    choices = _sort_scale_desc(q, choices)
     codes  = [c["code"] for c in choices]
-    labels = [_shorten_label(c["label"]) for c in choices]
-    if sort_desc:
-        total_pct = q.get("total", {}).get("percents", {})
-        order = sorted(range(len(codes)),
-                       key=lambda i: total_pct.get(codes[i], 0), reverse=True)
-        codes  = [codes[i]  for i in order]
-        labels = [labels[i] for i in order]
+    labels = _shorten_labels(choices)
     cd = CategoryChartData()
     cd.categories = labels
     for col in cols:
         cd.add_series(col["label"], _v100(col.get("percents", {}), codes))
     _clone_chart(slide, tmpl["col"], XL_CHART_TYPE.COLUMN_CLUSTERED, l, t, w, h, cd,
                  style_cat_labels=True)
+
+
+def _build_breakdown_bar(slide, q, group, tmpl, l, t, w, h) -> None:
+    """Horizontal clustered bars — one series per breakdown column, ordered like
+    the Total chart (largest at top). All MA bar charts hide 0% items; for
+    questions with >= MA_CROSSTAB_MIN_ITEMS choices, the MA_CROSSTAB_MIN_PCT
+    cutoff is applied on top of that."""
+    choices = q["choices"]
+    cols = group["columns"]
+    total_pct = q.get("total", {}).get("percents", {})
+    if len(choices) >= MA_CROSSTAB_MIN_ITEMS:
+        choices = [c for c in choices if total_pct.get(c["code"], 0) >= MA_CROSSTAB_MIN_PCT]
+    else:
+        choices = [c for c in choices if total_pct.get(c["code"], 0) > 0]
+    if not choices:
+        return
+    codes  = [c["code"] for c in choices]
+    labels = _shorten_labels(choices)
+    order = sorted(range(len(codes)), key=lambda i: total_pct.get(codes[i], 0))
+    codes  = [codes[i]  for i in order]
+    labels = [labels[i] for i in order]
+    cd = CategoryChartData()
+    cd.categories = labels
+    for col in cols:
+        cd.add_series(col["label"], _v100(col.get("percents", {}), codes))
+    _clone_chart(slide, tmpl["bar"], XL_CHART_TYPE.BAR_CLUSTERED, l, t, w, h, cd,
+                 style_cat_labels=True,
+                 legend_n=len(cols) if len(cols) > 1 else None)
 
 
 def _build_breakdown_stacked(slide, q, group, tmpl, l, t, w, h, *,
@@ -460,60 +877,88 @@ def _build_breakdown_stacked(slide, q, group, tmpl, l, t, w, h, *,
     if not choices:
         return
     cd = CategoryChartData()
-    cd.categories = [col["label"] for col in cols]
-    for choice in choices:
+    cd.categories = [_col_label_with_base(col) for col in cols]
+    choice_labels = _shorten_labels(choices)
+    for choice, choice_label in zip(choices, choice_labels):
         cd.add_series(
-            _shorten_label(choice["label"]),
+            choice_label,
             [round(col.get("percents", {}).get(choice["code"], 0.0) * 100.0, 4)
              for col in cols],
         )
     if horizontal:
         _clone_chart(slide, tmpl["bar"], XL_CHART_TYPE.BAR_STACKED_100,
-                     l, t, w, h, cd)
+                     l, t, w, h, cd, style_cat_labels=True, cat_font_pt=7)
     else:
         _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100,
-                     l, t, w, h, cd)
+                     l, t, w, h, cd, style_cat_labels=True, cat_font_pt=7)
 
 
 def _build_donut(slide, q, tmpl, l, t, w, h) -> None:
-    """Donut chart for SA≤5. Hides 0% slices."""
+    """Donut chart for SA≤5. Every choice (incl. 0%) stays in the legend, but
+    0%-value slices/labels are hidden on the chart itself. Order: scale
+    questions descending by scale point, non-scale by Total percent
+    descending (see _order_sa_choices)."""
     choices = q["choices"]
     pcts = q.get("total", {}).get("percents", {})
-    choices = [c for c in choices if pcts.get(c["code"], 0) > 0]
     if not choices:
         return
+    choices = _order_sa_choices(q, choices)
     codes  = [c["code"] for c in choices]
-    labels = [_shorten_label(c["label"]) for c in choices]
+    labels = _shorten_labels(choices)
     cd = CategoryChartData()
     cd.categories = labels
     cd.add_series("Total", _v100(pcts, codes))
     _clone_chart(slide, tmpl["donut"], XL_CHART_TYPE.DOUGHNUT, l, t, w, h, cd,
-                 per_point=True, palette=DONUT_PALETTE)
+                 per_point=True, palette=DONUT_PALETTE, legend_n=len(labels),
+                 hide_zero_labels=True)
 
 
 def _build_stacked(slide, q, breakdowns, tmpl, l, t, w, h) -> None:
-    """100%-stacked columns — series per choice. Hides choices that are 0% everywhere."""
+    """100%-stacked columns — series per choice, using the same DONUT_PALETTE
+    colors per choice so the two charts agree. Shows every choice (incl.
+    those that are 0% everywhere) so the legend always matches the donut's
+    full list.
+
+    Legend order (SA-Nominal only): confirmed via real PowerPoint rendering
+    that a multi-column legend (short labels) displays in literal series-add
+    order, while a single-column legend (long labels, wraps one-per-row)
+    displays REVERSED — so for SA-Nominal questions, series are added
+    choices-reversed only when _likely_single_column_legend() predicts the
+    latter, keeping the rendered legend matching the donut's order either
+    way. SA-Ordinal questions skip this compensation and always use plain
+    scale order, since their order is meaningful on its own (not just a
+    percent ranking) and shouldn't be perturbed by a label-length heuristic."""
     choices = q["choices"]
     all_cols, xlabels = [], []
     for bd in breakdowns:
         for col in bd["columns"]:
             all_cols.append(col)
-            xlabels.append(col["label"])
-    if not all_cols:
+            xlabels.append(_col_label_with_base(col))
+    if not all_cols or not choices:
         return
-    choices = [c for c in choices
-               if any(col.get("percents", {}).get(c["code"], 0) > 0 for col in all_cols)]
-    if not choices:
-        return
+    choices = _order_sa_choices(q, choices)
+    color_map = {c["code"]: DONUT_PALETTE[i % len(DONUT_PALETTE)]
+                 for i, c in enumerate(choices)}
+    shortened = {c["code"]: lbl for c, lbl in zip(choices, _shorten_labels(choices))}
+    is_nominal = q.get("scale_class") != "Ordinal"
+    insertion_order = (
+        list(reversed(choices))
+        if is_nominal and _likely_single_column_legend(shortened.values())
+        else choices
+    )
     cd = CategoryChartData()
     cd.categories = xlabels
-    for choice in choices:
+    series_colors = []
+    for choice in insertion_order:
         cd.add_series(
-            _shorten_label(choice["label"]),
+            shortened[choice["code"]],
             [round(col.get("percents", {}).get(choice["code"], 0.0) * 100.0, 4)
              for col in all_cols],
         )
-    _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100, l, t, w, h, cd)
+        series_colors.append(color_map[choice["code"]])
+    _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100, l, t, w, h, cd,
+                 style_cat_labels=True, cat_font_pt=7, series_colors=series_colors,
+                 hide_zero_labels=True)
 
 
 # ── Slide builder ─────────────────────────────────────────────────────────────
@@ -523,6 +968,7 @@ def _build_slide(prs, layout, q, page_num, tmpl, *, title_suffix: str = "") -> N
     chart_type = q.get("chart_type", "bar_vertical")
     breakdowns = q.get("breakdowns", [])
     n_groups   = len(breakdowns)
+    note_lines = [f"Question type: {_question_type_label(q)}"]
 
     q_label    = _shorten_label(q.get("label", ""))
     title_text = f"{q_label} {title_suffix}".strip() if title_suffix else q_label
@@ -541,16 +987,23 @@ def _build_slide(prs, layout, q, page_num, tmpl, *, title_suffix: str = "") -> N
                                DT_RIGHT_LBL_W, combined)
             _build_stacked(slide, q, breakdowns, tmpl,
                            DT_RIGHT_L, DT_RIGHT_T, DT_RIGHT_W, DT_RIGHT_H)
+    elif chart_type == "bar_horizontal":
+        # MA: Total + up to MAX_GROUPS_PER_SLIDE breakdowns, 3 equal-width columns.
+        _add_section_label(slide, _bh_col_l(0), BH_LBL_T, BH_COL_W, "Total")
+        _build_total_bar(slide, q, tmpl, _bh_col_l(0), BH_CHART_T, BH_COL_W, BH_CHART_H)
+        for gi, bd in enumerate(breakdowns[:MAX_GROUPS_PER_SLIDE]):
+            col_l = _bh_col_l(gi + 1)
+            _add_section_label(slide, col_l, BH_LBL_T, BH_COL_W, bd["group_label"])
+            _build_breakdown_bar(slide, q, bd, tmpl,
+                                 col_l, BH_CHART_T, BH_COL_W, BH_CHART_H)
+        if breakdowns and len(q.get("choices", [])) >= MA_CROSSTAB_MIN_ITEMS:
+            note_lines.append(MA_CROSSTAB_NOTE)
+
     else:
         _add_section_label(slide, BR_TOTAL_L, BR_TOTAL_T, BR_TOTAL_W, "Total")
-        if chart_type == "bar_horizontal":
-            _build_total_bar(slide, q, tmpl, BR_LEFT_L, BR_LEFT_T, BR_LEFT_W, BR_LEFT_H)
-        else:
-            _build_total_col(slide, q, tmpl, BR_LEFT_L, BR_LEFT_T, BR_LEFT_W, BR_LEFT_H)
+        _build_total_col(slide, q, tmpl, BR_LEFT_L, BR_LEFT_T, BR_LEFT_W, BR_LEFT_H)
 
         if breakdowns:
-            is_horiz = chart_type == "bar_horizontal"
-
             total_span = int(BR_RIGHT_BOTTOM - BR_RIGHT_FIRST_T)
             per_group  = total_span // max(n_groups, 1)
             chart_h    = per_group - int(SECTION_TO_CHART)
@@ -561,12 +1014,12 @@ def _build_slide(prs, layout, q, page_num, tmpl, *, title_suffix: str = "") -> N
                                    BR_RIGHT_LBL_W, bd["group_label"])
                 _build_breakdown_col(slide, q, bd, tmpl,
                                          BR_RIGHT_L, Emu(chart_t),
-                                         BR_RIGHT_W, Emu(chart_h),
-                                         sort_desc=is_horiz)
+                                         BR_RIGHT_W, Emu(chart_h))
 
     q_base = q.get("total", {}).get("base", "XX")
     _add_q_label(slide, Q_LABEL_L, Q_LABEL_T, Q_LABEL_W, Q_LABEL_H,
                  q.get("question", ""), q_label, q_base)
+    _set_slide_note(slide, "\n".join(note_lines))
     _add_text(slide, PAGE_L, PAGE_T, PAGE_W, PAGE_H,
               str(page_num), font_size=8, color=C_QBASE,
               align=PP_ALIGN.RIGHT, anchor="ctr")
@@ -627,6 +1080,8 @@ def generate(chart_data_path: str, output_path: str, *,
         if table_idx is not None and tbl.get("table_index") != table_idx:
             continue
         for q in tbl.get("questions", []):
+            if q.get("total", {}).get("base", 0) == 0:
+                continue
             _safe_print(f"  slide {page:>3}: {q.get('question', ''):<12}  {q.get('label', '')}")
             chart_type = q.get("chart_type", "bar_vertical")
             breakdowns = q.get("breakdowns", [])

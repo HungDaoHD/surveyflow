@@ -12,36 +12,37 @@ from pathlib import Path
 # ── Chart type heuristics ─────────────────────────────────────────────────────
 
 def _detect_chart_type(answer_type: str, n_choices: int) -> str:
-    """Infer chart type from answer_type and number of distinct choices.
+    """Infer chart type from answer_type.
 
-    MA / Matrix_MA  → horizontal bar (choices = reasons, may be many)
-    SA with ≤ 5     → donut + stacked bar (Likert / scale)
-    SA with > 5     → vertical grouped bar (income ranges, age brackets, etc.)
+    MA / Matrix_MA → horizontal bar (choices = reasons, may be many)
+    Everything else (SA, Matrix_SA, ...) → donut + stacked bar, regardless of
+    choice count — all SA questions now always use the donut/stack layout.
     """
     if answer_type in ("MA", "Matrix_MA"):
         return "bar_horizontal"
-    if n_choices <= 5:
-        return "donut_stacked"
-    return "bar_vertical"
+    return "donut_stacked"
 
 
 # ── Scale-question detection (Vietnamese + English) ───────────────────────────
 
-# Low/negative anchors expected in the FIRST choice of an ordered rating scale.
-# Substring match (anchors are multi-word, low false-positive risk).
+# Low/negative anchors expected in the lowest-code choice of an ordered rating
+# scale. Substring match (anchors are multi-word, low false-positive risk).
 _LIKERT_LOW = (
     # Vietnamese
     "hoàn toàn không", "rất không", "không hề", "cực kỳ không",
     "không bao giờ", "hoàn toàn phản đối", "không đồng ý",
     "không liên quan", "không hài lòng", "không quan trọng", "rất tệ",
+    "chắc chắn không mua", "sẽ không mua", "không chắc",
     # English
     "not at all", "strongly disagree", "very dissatisfied", "extremely dis",
     "never", "completely disagree", "not at all likely",
     "not at all relevant", "very poor", "very unlikely", "not important",
+    "definitely will not", "definitely won't", "definitely wont",
 )
 
-# High/positive anchors expected in the LAST choice. Matched at a word boundary
-# (start of string or preceded by a space) so "very" doesn't match "every".
+# High/positive anchors expected in the highest-code choice. Matched at a word
+# boundary (start of string or preceded by a space) so "very" doesn't match
+# "every".
 _LIKERT_HIGH = (
     # Vietnamese
     "rất ", "hoàn toàn ", "cực kỳ ", "chắc chắn", "luôn luôn",
@@ -52,44 +53,52 @@ _LIKERT_HIGH = (
 )
 
 
-def _detect_scale(labels: list) -> dict:
-    """Detect whether an ordered set of choice labels is a rating scale.
+def _detect_scale(choices: list) -> dict:
+    """Detect whether a set of choices (``{"code", "label"}`` dicts) is a
+    rating scale.
 
     Returns ``{"is_scale", "scale_type", "points"}`` where scale_type is
-    ``"numeric"`` (contiguous integers, e.g. 1–5, 0–10), ``"likert"`` (polar
-    text anchors at both ends, VN or EN), or ``None``.
+    ``"likert"`` (contiguous codes with polar anchor text at the low/high end,
+    VN or EN) or ``"numeric"`` (contiguous codes, no anchor text), or ``None``.
 
-    QMe does not tag scale questions, so this is heuristic — works on the choice
-    labels alone and is language-agnostic across Vietnamese and English.
+    Uses the answer **code** (not label text or list position) as the primary
+    signal — chart_data's choice order isn't guaranteed to already be sorted
+    ascending by scale value, and labels can mix plain numbers with full
+    anchor text only at the endpoints (e.g. "3", "4", "2",
+    "5 – Definitely will buy", "1 – Definitely won't buy"). QMe does not tag
+    scale questions, so this is heuristic and language-agnostic across
+    Vietnamese and English.
     """
-    norm = [str(l).strip() for l in labels if str(l).strip()]
-    n = len(norm)
+    n = len(choices)
     if n < 3:
         return {"is_scale": False, "scale_type": None, "points": n}
 
-    # 1) Numeric scale — labels are contiguous integers (1–5, 0–10, 1–10, …)
     try:
-        nums = [int(x) for x in norm]
-        if nums == list(range(nums[0], nums[0] + n)):
-            return {"is_scale": True, "scale_type": "numeric", "points": n}
-    except ValueError:
-        pass
+        codes = [int(c["code"]) for c in choices]
+    except (ValueError, TypeError, KeyError):
+        return {"is_scale": False, "scale_type": None, "points": n}
 
-    # 2) Likert text scale — polar anchors at both ends (handles up to 11-pt NPS)
-    if 3 <= n <= 11:
-        first = norm[0].lower()
-        last_padded = " " + norm[-1].lower()
-        low = any(a in first for a in _LIKERT_LOW)
-        high = any((" " + a) in last_padded for a in _LIKERT_HIGH)
-        if low and high:
-            return {"is_scale": True, "scale_type": "likert", "points": n}
+    # Codes must be a contiguous integer range (e.g. 1–5, 0–10, 1–10, …),
+    # regardless of what order the choices happen to be listed in.
+    if sorted(codes) != list(range(min(codes), min(codes) + n)):
+        return {"is_scale": False, "scale_type": None, "points": n}
 
-    return {"is_scale": False, "scale_type": None, "points": n}
+    if n > 11:
+        return {"is_scale": True, "scale_type": "numeric", "points": n}
+
+    by_code = sorted(choices, key=lambda c: int(c["code"]))
+    low_label  = str(by_code[0]["label"]).strip().lower()
+    high_label = " " + str(by_code[-1]["label"]).strip().lower()
+    low  = any(a in low_label for a in _LIKERT_LOW)
+    high = any((" " + a) in high_label for a in _LIKERT_HIGH)
+    scale_type = "likert" if (low and high) else "numeric"
+    return {"is_scale": True, "scale_type": scale_type, "points": n}
 
 
 # ── Block processor ───────────────────────────────────────────────────────────
 
-def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict) -> dict | None:
+def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
+                   scale_by_label: dict | None = None) -> dict | None:
     """Convert a single StubBlock dict → chart question dict.
 
     Returns None if the block has no percent rows (e.g. pure stat blocks).
@@ -149,13 +158,18 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict) ->
         breakdowns.append({"group_label": group_label, "columns": columns})
 
     answer_type = block.get("answer_type", "SA")
-    scale = _detect_scale([c["label"] for c in choices])
+    # Match on `question` (short code, e.g. "C4") not `label` — `label` is the
+    # datatable stub's display label, which falls back to the FULL question
+    # text (question_i18n) when the stub doesn't set a custom one, so it
+    # rarely matches metadata's short `label` field used as the lookup key.
+    scale_info = (scale_by_label or {}).get(block.get("question", "").upper(), {})
     return {
         "question":   block.get("question", ""),
         "label":      block.get("label", ""),
         "answer_type": answer_type,
         "chart_type": _detect_chart_type(answer_type, len(choices)),
-        "scale":      scale,
+        "scale_class":     scale_info.get("scale_class"),
+        "scale_high_code": scale_info.get("scale_high_code"),
         "choices":    choices,
         "total":      total_data,
         "breakdowns": breakdowns,
@@ -169,6 +183,7 @@ def export_chart_data(
     output_dir: Path,
     survey_name: str = "",
     version: str = "",
+    metadata: dict | None = None,
 ) -> str:
     """Transform table_results → chart_data.json, write to output_dir.
 
@@ -177,10 +192,30 @@ def export_chart_data(
         output_dir:     Directory to write chart_data.json (created if missing).
         survey_name:    Embedded in the JSON for reference.
         version:        Pipeline version string (e.g. "v1").
+        metadata:       context["metadata"] — used to look up each SA question's
+                         Claude-classified `scale_class` ("Ordinal"/"Nominal",
+                         see CLAUDE.md Step 3b) by question label.
 
     Returns:
         Absolute path of the written file.
     """
+    scale_by_label: dict[str, dict] = {}
+    if metadata:
+        def _add(label: str | None, sc: str | None, high_code) -> None:
+            if label and sc:
+                scale_by_label[label.upper()] = {
+                    "scale_class": sc, "scale_high_code": high_code,
+                }
+
+        for meta in metadata.get("questions", {}).values():
+            _add(meta.get("label"), meta.get("scale_class"), meta.get("scale_high_code"))
+            # Matrix questions: sub_questions (one per row, e.g. "A4_r1") carry
+            # their own scale_class/scale_high_code, since chart_data blocks
+            # for matrix rows are keyed by the sub-question's code, not the
+            # parent's.
+            for sub in (meta.get("sub_questions") or {}).values():
+                _add(sub.get("label"), sub.get("scale_class"), sub.get("scale_high_code"))
+
     tables_out: list[dict] = []
 
     for tr in table_results:
@@ -203,12 +238,12 @@ def export_chart_data(
         for block in blocks:
             btype = block.get("type", "stub")
             if btype == "stub":
-                q = _process_stub(block, total_idx, breakdown_groups)
+                q = _process_stub(block, total_idx, breakdown_groups, scale_by_label)
                 if q:
                     questions_out.append(q)
             elif btype in ("row_group", "ranking"):
                 for sub in block.get("sub_blocks", []):
-                    q = _process_stub(sub, total_idx, breakdown_groups)
+                    q = _process_stub(sub, total_idx, breakdown_groups, scale_by_label)
                     if q:
                         questions_out.append(q)
 

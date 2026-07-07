@@ -82,23 +82,34 @@ FOOTER_W, FOOTER_H = Emu(12188952), Emu(146304)
 SECTION_H = Emu(292608)         # 0.32"
 SECTION_TO_CHART = Emu(228600)  # gap from section label top to chart top
 
-# Donut plot area AND legend are both left on PowerPoint's own fully
-# automatic layout (no c:manualLayout at all) — manually pinning either
-# one was tried across several iterations (fixed ring size, fixed legend
-# position/height) and each version eventually caused some real chart to
-# render wrong (ring inconsistent size, legend spread out, legend stuck at
-# top-left, legend overlapping the ring for many-choice questions) in ways
-# that couldn't be fully predicted without live rendering. PowerPoint's own
-# auto-layout reliably avoids overlap and picks a sensible row/column
-# arrangement for legendPos="b" on its own.
-#
-# DONUT_CENTER_Y_FRAC is therefore a plain heuristic (not backed by any
-# guaranteed layout) for where the ring's visual center roughly falls, used
-# only to position the Mean/NPS overlay text in _add_donut_center_text —
-# it may be slightly off for questions with an unusually large or small
-# number of legend items, since actual ring size now varies with how much
-# room the auto-legend ends up needing.
-DONUT_CENTER_Y_FRAC = 0.38
+# Donut ring (plot area) / legend split, as a fraction of the donut chart's
+# own bounding box height — ring on top, legend in the remaining band below
+# (legendPos="b" in the template). Explicit c:manualLayout, not left to
+# PowerPoint's auto-layout: earlier iterations that pinned only PART of this
+# (e.g. legend width but not height) each caused a different regression
+# (ring inconsistent size, legend stuck top-left, legend overlapping the
+# ring for many-choice questions) — but fixing BOTH the ring's and the
+# legend's rectangles together, to a plain even split, avoids overlap by
+# construction (they can never both claim the same space) and gives every
+# question the same ring size regardless of choice/legend-item count.
+# Fixing the legend's HEIGHT (rather than leaving it fully automatic) is
+# also what makes PowerPoint spread entries across as many columns as fit
+# that height, instead of growing a single tall column of rows.
+DONUT_RING_FRAC = 0.70
+
+# Width of the legend's manualLayout box, as a fraction of the donut chart's
+# own bounding box width, centered horizontally (x = (1 - w) / 2). When this
+# was 1.0 (full chart width), PowerPoint spread each row's entries out to
+# fill that whole width, leaving very wide gaps between short entries (e.g.
+# only 4-6 items across 45% of the slide). Narrowing the box pulls entries
+# closer together; centered so the row still looks balanced under the ring.
+DONUT_LEGEND_W_FRAC = 0.70
+
+# Vertical center of the ring, as a fraction of the chart's bounding box
+# height — used only to position the Mean/NPS overlay text in
+# _add_donut_center_text. Derived directly from DONUT_RING_FRAC since the
+# ring's plot-area rectangle now spans exactly [0, DONUT_RING_FRAC].
+DONUT_CENTER_Y_FRAC = DONUT_RING_FRAC / 2
 
 # Fraction of the stacked-chart's own allocated height reserved (at the top)
 # for the 2-line ("7.2" / "-5.0") Mean/NPS label band above each column —
@@ -107,12 +118,12 @@ DONUT_CENTER_Y_FRAC = 0.38
 STACK_MEAN_BAND_FRAC = 0.11
 
 # ── Layout A: donut + 100%-stacked (slide2 in template) ──────────────────────
-# Donut / breakdown split = 40% / 60% of the available content width.
+# Donut / breakdown split = 45% / 55% of the available content width.
 DT_MARGIN_L = Emu(548640)
 DT_GAP      = Emu(228600)
 DT_CONTENT_W = int(SW) - 2 * int(DT_MARGIN_L)
 _DT_AVAIL_W  = DT_CONTENT_W - int(DT_GAP)
-DT_LEFT_W  = Emu(_DT_AVAIL_W * 40 // 100)
+DT_LEFT_W  = Emu(_DT_AVAIL_W * 45 // 100)
 DT_RIGHT_W = Emu(_DT_AVAIL_W - int(DT_LEFT_W))
 DT_RIGHT_L = Emu(int(DT_MARGIN_L) + int(DT_LEFT_W) + int(DT_GAP))
 
@@ -747,11 +758,59 @@ def _apply_palette(chartspace, palette: list, *, per_point: bool = False,
             ser.insert(insert_pos + i, dPt)
 
 
+def _set_donut_layout(chartspace, *, ring_frac: float) -> None:
+    """Force explicit c:manualLayout so the ring (plot area) occupies the top
+    `ring_frac` of the chart's bounding box and the legend occupies the
+    remaining bottom band — see DONUT_RING_FRAC for rationale. Both
+    rectangles are set together (never just one), so they can't overlap."""
+    chart_el = chartspace.find(qn("c:chart"))
+    if chart_el is None:
+        return
+
+    plot_area = chart_el.find(qn("c:plotArea"))
+    if plot_area is not None:
+        old_layout = plot_area.find(qn("c:layout"))
+        if old_layout is not None:
+            plot_area.remove(old_layout)
+        layout = etree.Element(qn("c:layout"))
+        manual = etree.SubElement(layout, qn("c:manualLayout"))
+        etree.SubElement(manual, qn("c:layoutTarget")).set("val", "inner")
+        etree.SubElement(manual, qn("c:xMode")).set("val", "edge")
+        etree.SubElement(manual, qn("c:yMode")).set("val", "edge")
+        etree.SubElement(manual, qn("c:x")).set("val", "0")
+        etree.SubElement(manual, qn("c:y")).set("val", "0")
+        etree.SubElement(manual, qn("c:w")).set("val", "1")
+        etree.SubElement(manual, qn("c:h")).set("val", str(ring_frac))
+        # CT_PlotArea: layout is always the first optional child.
+        plot_area.insert(0, layout)
+
+    legend = chart_el.find(qn("c:legend"))
+    if legend is not None:
+        old_layout = legend.find(qn("c:layout"))
+        if old_layout is not None:
+            legend.remove(old_layout)
+        legend_x = round((1 - DONUT_LEGEND_W_FRAC) / 2, 4)
+        layout = etree.Element(qn("c:layout"))
+        manual = etree.SubElement(layout, qn("c:manualLayout"))
+        etree.SubElement(manual, qn("c:xMode")).set("val", "edge")
+        etree.SubElement(manual, qn("c:yMode")).set("val", "edge")
+        etree.SubElement(manual, qn("c:x")).set("val", str(legend_x))
+        etree.SubElement(manual, qn("c:y")).set("val", str(round(ring_frac, 4)))
+        etree.SubElement(manual, qn("c:w")).set("val", str(DONUT_LEGEND_W_FRAC))
+        etree.SubElement(manual, qn("c:h")).set("val", str(round(1 - ring_frac, 4)))
+        # CT_Legend order: legendPos?, legendEntry*, layout?, overlay?, spPr?, txPr?
+        entries = legend.findall(qn("c:legendEntry"))
+        anchor = entries[-1] if entries else legend.find(qn("c:legendPos"))
+        insert_at = list(legend).index(anchor) + 1 if anchor is not None else 0
+        legend.insert(insert_at, layout)
+
+
 def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
                  *, drop_legend: bool = False, per_point: bool = False,
                  palette: list | None = None,
                  cat_font_pt: int = 7, legend_n: int | None = None,
-                 hide_zero_labels: bool = False, series_colors: list | None = None):
+                 hide_zero_labels: bool = False, series_colors: list | None = None,
+                 donut_ring_frac: float | None = None):
     """Add a chart, replace its XML with a deep copy of the template chartSpace,
     then inject `chart_data` via replace_data() so template styling is kept.
 
@@ -792,6 +851,8 @@ def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
     _style_data_labels(cp._element)
     _apply_palette(cp._element, palette or CHART_PALETTE, per_point=per_point,
                    series_colors=series_colors)
+    if donut_ring_frac is not None:
+        _set_donut_layout(cp._element, ring_frac=donut_ring_frac)
     return cp.chart
 
 
@@ -1067,12 +1128,10 @@ def _add_multiline_text(slide, left, top, width, height, lines: list[str], *,
 
 def _add_donut_center_text(slide, l, t, w, h, lines: list[str]) -> None:
     """Small Mean/NPS text box sitting inside the donut's hole (holeSize=55%
-    of radius, see donut.xml). The chart's own legend is at the bottom
-    (legendPos="b"), so the ring's visual center sits somewhat above the
-    shape's full vertical midpoint — approximated here since exact
-    placement depends on PowerPoint's own auto plot-area layout (no manual
-    layout is set in the template), which can't be measured without
-    rendering; nudge DONUT_CENTER_Y_FRAC if it's off once seen rendered."""
+    of radius, see donut.xml). The ring's plot area is manually pinned to
+    the top DONUT_RING_FRAC of the chart box (see _set_donut_layout), so
+    its vertical center is exactly DONUT_CENTER_Y_FRAC — no longer a
+    render-and-check heuristic."""
     box_w = Emu(int(w) * 2 // 5)
     box_h = Emu(int(h) // 6)
     box_l = Emu(int(l) + (int(w) - int(box_w)) // 2)
@@ -1098,7 +1157,7 @@ def _build_donut(slide, q, tmpl, l, t, w, h) -> None:
     cd.add_series("Total", _v100(pcts, codes))
     _clone_chart(slide, tmpl["donut"], XL_CHART_TYPE.DOUGHNUT, l, t, w, h, cd,
                  per_point=True, palette=DONUT_PALETTE, legend_n=len(labels),
-                 hide_zero_labels=True)
+                 hide_zero_labels=True, donut_ring_frac=DONUT_RING_FRAC)
     center_lines = _mean_nps_lines(q.get("total", {}))
     if center_lines:
         _add_donut_center_text(slide, l, t, w, h, center_lines)

@@ -126,19 +126,25 @@ This produces:
 > definitions needed to build a correct `datatable.json`. Ask datatable questions AFTER
 > ingestion so you can reference real choice codes from metadata.
 
-### Step 3b — Classify SA questions (Ordinal vs Nominal)
+### Step 3b — Classify SA AND Matrix_SA questions (Ordinal vs Nominal)
+
+> ⚠️ **Quét CẢ `SA` lẫn `Matrix_SA` — đây là lỗi thực tế đã xảy ra** (một agent khác từng lọc
+> cứng `answer_type == "SA"` trong script, bỏ sót toàn bộ Matrix_SA khỏi vòng phân loại, khiến
+> Q17/Q15/Q11/Q6_A-kiểu-câu không bao giờ có `scale_class` → không bao giờ tự thêm mean/T2B/NPS
+> ở Step 3c/3d). Hai loại này dùng **chung một quy trình phân loại**, chỉ khác chỗ ghi field.
 
 Ngay sau khi có `metadata.json` (và `metadata.json` chưa có field `scale_class`), Claude đọc
-từng câu `answer_type: "SA"` và tự phân loại — dùng khả năng đọc hiểu ngữ cảnh câu hỏi +
-choices, **không phải** một rule cố định trong code:
+từng câu `answer_type: "SA"` **và** `answer_type: "Matrix_SA"`, tự phân loại — dùng khả năng đọc
+hiểu ngữ cảnh câu hỏi + choices, **không phải** một rule cố định trong code:
 
 | Loại câu hỏi         | Tên nên dùng                 | Lưu vào `scale_class` |
 | --------------------- | ----------------------------- | ---------------------- |
 | SA có thang đo         | SA Scale / SA Likert Scale    | `"Ordinal"`             |
 | SA phân loại thường    | SA Categorical / SA Nominal   | `"Nominal"`             |
 
-Ghi giá trị vào field mới **`scale_class`** ngay trong entry của câu đó trong `metadata.json`
-(chỉ thêm cho câu SA; các loại câu khác — MA, Matrix, FT, NUM... — bỏ qua field này):
+Ghi giá trị vào field mới **`scale_class`** ngay trong entry của câu đó trong `metadata.json`.
+**Áp dụng cho cả `SA` lẫn `Matrix_SA`** — chỉ các loại KHÁC (`MA`, `Matrix_MA`, `FT`, `NUM`,
+`multiplenumber`, `ranking`...) mới bỏ qua field này:
 
 ```json
 "795699": {
@@ -149,17 +155,12 @@ Ghi giá trị vào field mới **`scale_class`** ngay trong entry của câu đ
 }
 ```
 
-Sau khi thêm field cho tất cả câu SA, ghi đè lại `metadata.json`. Bước này chỉ cần chạy
-**một lần** sau ingestion — nếu `scale_class` đã tồn tại trong file (từ lần chạy trước) thì bỏ qua.
-
-> Ví dụ Ordinal: thang hài lòng (1–5), tần suất (Never→Always), mức độ đồng ý, purchase
-> intent (Definitely won't buy→Definitely will buy).
-> Ví dụ Nominal: giới tính, khu vực, thương hiệu, loại sản phẩm — không có thứ tự nội tại.
-
-**Matrix_SA cũng phải phân loại** — mỗi câu Matrix_SA có 1 bộ `choices_i18n.columns` dùng
-chung cho tất cả rows (VD: thang hài lòng áp dụng cho từng brand). Phân loại 1 lần dựa trên
-`columns`, rồi ghi `scale_class` vào **cả entry cha lẫn từng entry trong `sub_questions`**
-(vì appendix PPTX khớp theo mã sub-question, ví dụ `A4_r1`, không phải mã câu cha):
+**Matrix_SA — ghi vào CẢ entry cha lẫn từng entry trong `sub_questions`** (thiếu phần
+`sub_questions` là sai — chỉ ghi entry cha không đủ). Mỗi câu Matrix_SA có 1 bộ
+`choices_i18n.columns` dùng chung cho tất cả rows (VD: thang hài lòng áp dụng cho từng brand),
+nên chỉ cần phân loại **một lần** dựa trên `columns` rồi copy `scale_class` xuống từng
+`sub_questions` entry — vì appendix PPTX khớp theo mã sub-question (VD `A4_r1`), không phải mã
+câu cha:
 
 ```json
 "802749": {
@@ -170,6 +171,14 @@ chung cho tất cả rows (VD: thang hài lòng áp dụng cho từng brand). Ph
   }
 }
 ```
+
+Sau khi thêm field cho tất cả câu SA/Matrix_SA, ghi đè lại `metadata.json`. Bước này chỉ cần
+chạy **một lần** sau ingestion — nếu `scale_class` đã tồn tại trong file (từ lần chạy trước) thì
+bỏ qua.
+
+> Ví dụ Ordinal: thang hài lòng (1–5), tần suất (Never→Always), mức độ đồng ý, purchase
+> intent (Definitely won't buy→Definitely will buy).
+> Ví dụ Nominal: giới tính, khu vực, thương hiệu, loại sản phẩm — không có thứ tự nội tại.
 
 **⚠️ Kiểm tra chiều thang đo — đừng giả định code lớn = điểm cao.** Một số thang đo (đặc
 biệt là tần suất) đánh số NGƯỢC: code 1 = tần suất cao nhất (VD: "Hầu như mỗi ngày"), code
@@ -966,7 +975,7 @@ output/SURVEY_NAME/
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
 | "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
-| "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA, ghi field `scale_class` |
+| "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class` |
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó trong metadata.json — chỉ Ordinal mới tự thêm `mean` |
 | "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
 | "thang đo tần suất bị đảo, mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |

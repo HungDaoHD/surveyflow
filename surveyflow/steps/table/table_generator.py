@@ -141,6 +141,47 @@ def _resolve_display_codes(all_codes: list[str], sc_choices: list[dict]) -> list
     return ordered
 
 
+def _quantile_num_groups(values: pd.Series, n_quantiles: int) -> list[tuple[list[str], str]]:
+    """Split a NUM question's raw values into ``n_quantiles`` bins with ~equal
+    respondent counts each (unlike equal-width bins, which can leave most
+    bins empty for skewed data like income/spending — see group_numeric.py's
+    ``--width`` mode for that case instead).
+
+    Cut points come from ``values`` as a whole (the question's overall/total
+    distribution) so every banner column is counted against the SAME bin
+    boundaries — matches how T2B/B2B/NPS group codes are fixed once from the
+    scale definition, not recomputed per banner column.
+
+    Returns ``[(member_value_strings, label), ...]`` — one entry per
+    non-empty bin, real min/max of the values actually inside used for the
+    label (not pandas' interval edges, which can carry float noise), largest
+    bin last shown as "X+" (matches group_numeric.py's equal-width labels).
+    """
+    if n_quantiles < 2 or len(values) == 0:
+        return []
+    is_int = bool((values == values.round()).all())
+    try:
+        cats = pd.qcut(values, q=n_quantiles, duplicates="drop")
+    except ValueError:
+        return []
+
+    intervals = sorted(cats.cat.categories, key=lambda iv: iv.left)
+    groups: list[tuple[list[str], str]] = []
+    for i, interval in enumerate(intervals):
+        members = sorted(values[cats == interval].unique())
+        if not members:
+            continue
+        lo, hi = members[0], members[-1]
+        is_last = i == len(intervals) - 1
+        if is_last:
+            label = f"{int(lo) if is_int else lo:g}+"
+        else:
+            label = (f"{int(lo)}-{int(hi)}" if is_int else f"{lo:g}-{hi:g}")
+        codes = [str(int(v)) if is_int else str(v) for v in members]
+        groups.append((codes, label))
+    return groups
+
+
 # ── Data structures ────────────────────────────────────────────────────────────
 # Values and sig_marks are keyed by column INDEX (int) for uniqueness,
 # because letters reset to A in every banner group.
@@ -1665,12 +1706,20 @@ def compute_table(
         ma_raw_cols = q_meta.get("rawdata_columns", []) if atype == "MA" else []
         is_ma       = atype == "MA"
 
-        if not is_ma and q_col not in df.columns:
+        # multiplenumber questions have NO bare q_col in rawdata — each choice
+        # has its OWN numeric column instead (e.g. "D5_n2".."D5_n12"), matched
+        # by trailing "_n{code}" suffix via _ma_col_map (same helper MA uses,
+        # which also strips the "n" — see banner_builder.py for why).
+        is_mn        = atype == "multiplenumber"
+        mn_raw_cols  = q_meta.get("rawdata_columns", []) if is_mn else []
+
+        if not is_ma and not is_mn and q_col not in df.columns:
             continue
 
         # base counts keyed by column index
         bases: dict[int, int] = {
             i: (_base_count_ma(sub_dfs[i], ma_raw_cols) if is_ma
+                else _base_count_ma(sub_dfs[i], mn_raw_cols) if is_mn
                 else _base_count(sub_dfs[i], q_col))
             for i in range(n)
         }
@@ -1711,6 +1760,97 @@ def compute_table(
                 ))
             continue
 
+        # ── multiplenumber question — one numeric column per choice/category ──
+        # (e.g. budget-allocation questions: "how much did you spend on each
+        # category"). No single q_col exists — each choice has its own raw
+        # column, matched by trailing "_n{code}" suffix (mn_col_map). Produces
+        # one row per category per requested stat: "percent" = % of
+        # respondents who entered ANY value for that category; "mean" uses
+        # the whole-question base as a COMMON denominator across every
+        # category (missing category = 0), so if this is a constant-sum
+        # allocation question (each respondent's row always adds up to the
+        # same total — 10, 100, whatever the survey enforces), the category
+        # means sum to that exact same total. "std"/"se"/"min"/"max" instead
+        # describe the spread of values actually entered for that category,
+        # so they keep the category's own non-null subset as before.
+        if is_mn:
+            mn_col_map    = _ma_col_map(mn_raw_cols)
+            mn_codes      = sorted(choices_i18n.keys(), key=lambda x: int(x))
+            mn_rows: list[StubRow] = []
+            for stat in DEFAULT_STATS_ORDER:
+                if stat not in req_stats:
+                    continue
+                if stat == "base":
+                    mn_rows.append(StubRow(
+                        label="Base", row_type="base",
+                        counts=dict(bases),
+                        values={i: float(v) for i, v in bases.items()},
+                    ))
+                elif stat == "percent":
+                    for code in mn_codes:
+                        col = mn_col_map.get(code)
+                        cnts_mn: dict[int, int]   = {}
+                        pcts_mn: dict[int, float] = {}
+                        for i in range(n):
+                            cnt = (int(sub_dfs[i][col].notna().sum())
+                                   if col and col in sub_dfs[i].columns else 0)
+                            cnts_mn[i] = cnt
+                            pcts_mn[i] = cnt / bases[i] if bases[i] else 0.0
+                        mn_rows.append(StubRow(
+                            label=_clabel(choices_i18n, code), row_type="percent",
+                            counts=cnts_mn, values=pcts_mn, code=code,
+                        ))
+                elif stat == "mean":
+                    # Common denominator (whole-question base) for every
+                    # category, missing values treated as 0 — see note above
+                    # on why this (not a per-category subset mean) is what
+                    # makes category means sum to the respondent-level total.
+                    for code in mn_codes:
+                        col = mn_col_map.get(code)
+                        mn_stat_vals: dict[int, float] = {}
+                        for i in range(n):
+                            base = bases[i]
+                            if base == 0 or not col or col not in sub_dfs[i].columns:
+                                mn_stat_vals[i] = 0.0
+                                continue
+                            total = pd.to_numeric(sub_dfs[i][col], errors="coerce").fillna(0).sum()
+                            mn_stat_vals[i] = round(float(total) / base, 2)
+                        mn_rows.append(StubRow(
+                            label=f"{STAT_LABELS['mean']} — {_clabel(choices_i18n, code)}",
+                            row_type="mean", counts={i: 0 for i in range(n)},
+                            values=mn_stat_vals, code=code,
+                        ))
+                elif stat in ("std", "se", "min", "max"):
+                    for code in mn_codes:
+                        col = mn_col_map.get(code)
+                        mn_stat_vals: dict[int, float] = {}
+                        for i in range(n):
+                            if not col or col not in sub_dfs[i].columns:
+                                mn_stat_vals[i] = 0.0
+                                continue
+                            numeric = pd.to_numeric(sub_dfs[i][col], errors="coerce").dropna()
+                            if len(numeric) == 0:
+                                mn_stat_vals[i] = 0.0
+                                continue
+                            _s = float(numeric.std(ddof=1)) if len(numeric) > 1 else 0.0
+                            if stat == "std": mn_stat_vals[i] = round(_s, 2)
+                            elif stat == "se":  mn_stat_vals[i] = round(_s / np.sqrt(len(numeric)), 2)
+                            elif stat == "min": mn_stat_vals[i] = round(float(numeric.min()), 2)
+                            elif stat == "max": mn_stat_vals[i] = round(float(numeric.max()), 2)
+                        mn_rows.append(StubRow(
+                            label=f"{STAT_LABELS[stat]} — {_clabel(choices_i18n, code)}",
+                            row_type=stat, counts={i: 0 for i in range(n)},
+                            values=mn_stat_vals, code=code,
+                        ))
+            if mn_rows:
+                blocks.append(StubBlock(
+                    question_code=q.upper(),
+                    question_label=q_label,
+                    answer_type=atype,
+                    rows=mn_rows,
+                ))
+            continue
+
         def _sig_for_code(code: str) -> dict:
             """Sig marks for a code, routing to the correct column."""
             if is_ma:
@@ -1732,6 +1872,70 @@ def compute_table(
                     counts=dict(bases),
                     values={i: float(v) for i, v in bases.items()},
                 ))
+
+            elif stat == "percent" and atype == "NUM":
+                # NUM has no predefined choices — each distinct numeric value
+                # entered becomes its own category row, largest value first
+                # (unlike FT's alphabetical-unique-text rows, sorted numerically).
+                #
+                # Optional grouping: a stub entry's "choices" array can define
+                # ranges/buckets over these raw values using the SAME unified-
+                # choices group mechanism as SA (e.g. Claude proposing age
+                # bands "20-24", "25-30", … from the real value distribution)
+                # — { "codes": ["20","21",...,"24"], "label": "20-24" }, plus
+                # { "code": "20", "hidden": true } per raw value to hide the
+                # individual rows once they're covered by a group. Without a
+                # "choices" config (the non-AI / default path), every raw
+                # value keeps showing as its own row, exactly as before.
+                num_all = pd.to_numeric(df[q_col], errors="coerce").dropna()
+                sorted_num_codes = [
+                    str(int(v)) if float(v).is_integer() else str(v)
+                    for v in sorted(num_all.unique(), reverse=True)
+                ]
+                avail_num_codes = set(sorted_num_codes)
+
+                def _num_pct_row(val_str: str) -> StubRow:
+                    val = float(val_str)
+                    cnts_: dict[int, int]   = {}
+                    pcts_: dict[int, float] = {}
+                    for i in range(n):
+                        cnt = int((pd.to_numeric(sub_dfs[i][q_col], errors="coerce") == val).sum())
+                        cnts_[i] = cnt
+                        pcts_[i] = cnt / bases[i] if bases[i] else 0.0
+                    return StubRow(label=val_str, row_type="percent",
+                                   counts=cnts_, values=pcts_, code=val_str)
+
+                def _num_grp_row(grp_vals: list[str], label: str) -> StubRow:
+                    targets = [float(v) for v in grp_vals]
+                    g_cnts: dict[int, int]   = {}
+                    g_pcts: dict[int, float] = {}
+                    for i in range(n):
+                        col_numeric = pd.to_numeric(sub_dfs[i][q_col], errors="coerce")
+                        cnt = int(col_numeric.isin(targets).sum())
+                        g_cnts[i] = cnt
+                        g_pcts[i] = cnt / bases[i] if bases[i] else 0.0
+                    return StubRow(label=label, row_type="group", counts=g_cnts, values=g_pcts)
+
+                _choices_cfg_num = sc.get("choices", [])
+                _num_quantile    = sc.get("num_quantile")
+                if _is_unified_choices(_choices_cfg_num):
+                    # Explicit manual "choices" groups always take priority
+                    # over "num_quantile" — an explicit override wins.
+                    rows.extend(_render_unified_choices_rows(
+                        _choices_cfg_num, sorted_num_codes, avail_num_codes,
+                        _num_pct_row, _num_grp_row,
+                    ))
+                elif _num_quantile:
+                    # Auto quantile binning, computed fresh from the real
+                    # data on every run (no manual pre-computed "choices"
+                    # needed) — good default for skewed NUM data (income,
+                    # spending) where equal-width bins leave most respondents
+                    # crammed into 1-2 buckets. See _quantile_num_groups.
+                    for grp_vals, label in _quantile_num_groups(num_all, int(_num_quantile)):
+                        rows.append(_num_grp_row(grp_vals, label))
+                else:
+                    for code in sorted_num_codes:
+                        rows.append(_num_pct_row(code))
 
             elif stat == "percent":
                 if atype not in CODEABLE_TYPES or not choices_i18n:

@@ -88,10 +88,22 @@ def _patch_multiplenumber_headers(header: list, sub_labels: list) -> list:
       header:    ['D2',    '',      ...]
       sub-label: ['Q25_1', 'Q25_2', ...]
 
-    This renames them to ['D2_1', 'D2_2', ...] so all choice columns are
+    This renames them to ['D2_n1', 'D2_n2', ...] so all choice columns are
     preserved.  Detection rule: a non-empty header column has sub-label
     ``Q{n}_1`` and the following columns have empty headers with sub-labels
     ``Q{n}_2``, ``Q{n}_3``, … (same Q-base).
+
+    The ``n`` marker (rather than a bare ``{label}_{k}`` suffix) exists to
+    avoid a real collision found in production data: a multiplenumber
+    question's own category-1 column (e.g. ``D5_1``) can end up with the
+    exact same name as a completely different, separately-labeled question
+    (a survey literally had both "D5" — category 1 named "D5_1" — AND an
+    unrelated question whose own label IS "D5_1"). ``annotate_rawdata_columns``
+    then misattributed that column to the wrong question via longest-label-
+    wins exact match. No real QMe question label naturally looks like
+    ``D5_n1``, so this suffix can't collide the same way. ``_ma_col_map``
+    (banner_builder.py) strips the ``n`` back off when mapping a column to
+    its choice code.
     """
     patched = list(header)
     i = 0
@@ -114,7 +126,7 @@ def _patch_multiplenumber_headers(header: list, sub_labels: list) -> list:
                     break
             if len(group) > 1:
                 for k, col_idx in enumerate(group, 1):
-                    patched[col_idx] = f"{h}_{k}"
+                    patched[col_idx] = f"{h}_n{k}"
             i = j
         else:
             i += 1

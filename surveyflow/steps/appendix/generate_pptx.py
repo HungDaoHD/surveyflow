@@ -971,12 +971,17 @@ def _order_sa_choices(q: dict, choices: list) -> list:
       Passives, Detractors) in that fixed order, keyed by synthetic codes
       "0"/"1"/"2". Sorting by scale value here would be meaningless (and
       actively wrong) since those aren't real scale codes.
+    - Range/bucket groups (`preserve_order` — NUM `num_quantile` or an
+      all-hidden "choices" config, see chart_data_exporter.py): also never
+      re-sorted, for the same reason as NPS — the groups already come out
+      in a meaningful order (e.g. ascending age bands "20-28"/"29-34"/...)
+      that Total-percent sorting would scramble.
     - SA-Ordinal: sort by scale order descending (see _sort_scale_desc).
     - SA-Nominal: sort by Total percent descending, tie-broken by ascending
       code (stable/deterministic tie-break, rather than silently depending
       on whatever order the choices happened to arrive in — which mattered
       in practice for questions with several 0%/tied choices)."""
-    if q.get("is_nps"):
+    if q.get("is_nps") or q.get("preserve_order"):
         return choices
     if q.get("scale_class") == "Ordinal":
         return _sort_scale_desc(q, choices)

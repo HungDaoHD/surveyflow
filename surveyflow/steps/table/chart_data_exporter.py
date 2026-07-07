@@ -101,31 +101,61 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
                    scale_by_label: dict | None = None) -> dict | None:
     """Convert a single StubBlock dict → chart question dict.
 
-    Returns None if the block has no percent rows (e.g. pure stat blocks).
+    Returns None if the block has no usable choices (e.g. pure stat blocks).
     """
     rows: list[dict] = block.get("rows", [])
     if not rows:
         return None
 
-    # Collect choices (percent rows only, preserving order)
+    answer_type = block.get("answer_type", "SA")
+
+    # Collect choices from individual percent rows, preserving order.
     choices: list[dict] = []
-    choice_codes: list[str] = []
     for row in rows:
         if row.get("row_type") == "percent" and row.get("code") is not None:
             choices.append({"code": str(row["code"]), "label": row["label"]})
-            choice_codes.append(str(row["code"]))
+
+    base_row = next((r for r in rows if r.get("row_type") == "base"), None)
+    nps_row  = next((r for r in rows if r.get("row_type") == "nps"), None)
+    group_rows = [r for r in rows if r.get("row_type") == "group"]
+
+    # NPS (Step 3c: "nps" stat + Promoters/Passives/Detractors groups) always
+    # uses its 3 fixed groups instead of individual codes.
+    #
+    # Range/bucket groups — NUM using "num_quantile" (see CLAUDE.md Step 4
+    # NUM defaults), or any question whose "choices" config hides every
+    # individual code and shows only group summaries: when there are NO
+    # percent rows of its own but there ARE "group" rows, use those groups
+    # as the chart's choice list — otherwise the question has zero choices
+    # and would silently vanish from the appendix (no slide at all).
+    use_group_as_choices = bool(nps_row) or (not choices and bool(group_rows))
+    if use_group_as_choices:
+        choices = [{"code": str(i), "label": row["label"]} for i, row in enumerate(group_rows)]
+
+    # multiplenumber (budget-allocation style questions, e.g. "how much did
+    # you spend on each category"): "percent" rows are response RATES (% who
+    # entered ANY value for that category — don't sum to 100%), not a valid
+    # donut/100%-stack source. "mean" rows use a common-denominator formula
+    # (see table_generator.py Step 3c) that DOES sum to the respondent-level
+    # constant total by design (10, 100, whatever the survey enforces) —
+    # normalize them to fractions-of-1 and use THOSE as the chart's percents
+    # instead, so multiplenumber renders as donut+stack exactly like an
+    # SA-Ordinal question (per-category share of the average allocation).
+    mean_rows_by_code: dict[str, dict] = {}
+    if answer_type == "multiplenumber":
+        mean_rows_by_code = {
+            str(r["code"]): r for r in rows
+            if r.get("row_type") == "mean" and r.get("code") is not None
+        }
+        if mean_rows_by_code:
+            label_by_code = {c["code"]: c["label"] for c in choices}
+            choices = [
+                {"code": code, "label": label_by_code.get(code, r["label"])}
+                for code, r in mean_rows_by_code.items()
+            ]
 
     if not choices:
         return None
-
-    # Base row for N counts
-    base_row = next((r for r in rows if r.get("row_type") == "base"), None)
-    mean_row = next((r for r in rows if r.get("row_type") == "mean"), None)
-    nps_row  = next((r for r in rows if r.get("row_type") == "nps"), None)
-    # NPS questions (Step 3c: "nps" stat + Promoters/Passives/Detractors
-    # choices groups) — the chart shows only these 3 groups instead of every
-    # individual code, always in this fixed order (never re-sorted).
-    group_rows = [r for r in rows if r.get("row_type") == "group"] if nps_row else []
 
     def _base_at(idx: int) -> int:
         if base_row is None:
@@ -141,7 +171,14 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
 
     def _percents_at(idx: int) -> dict[str, float]:
         out: dict[str, float] = {}
-        if group_rows:
+        if mean_rows_by_code:
+            raw = {code: (r.get("values", [])[idx] if idx < len(r.get("values", [])) else 0.0)
+                   for code, r in mean_rows_by_code.items()}
+            total = sum(raw.values())
+            for code, v in raw.items():
+                out[code] = round(v / total, 4) if total else 0.0
+            return out
+        if use_group_as_choices:
             for i, row in enumerate(group_rows):
                 vals = row.get("values", [])
                 out[str(i)] = round(float(vals[idx]), 4) if idx < len(vals) else 0.0
@@ -153,6 +190,15 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
                 out[str(row["code"])] = round(v, 4)
         return out
 
+    # A single scalar "Mean: X" donut-hole overlay (Step 3c, SA/Matrix_SA
+    # Ordinal / NUM) only makes sense when there's exactly one mean value for
+    # the whole question. multiplenumber has one mean PER CATEGORY (already
+    # used as the percents source above) — showing any one of them as if it
+    # were "the" question's mean would be misleading, so skip the scalar
+    # overlay entirely for multiplenumber.
+    mean_row = None if mean_rows_by_code else next(
+        (r for r in rows if r.get("row_type") == "mean"), None)
+
     def _col_data(idx: int) -> dict:
         data = {"base": _base_at(idx), "percents": _percents_at(idx)}
         mean_v = _stat_at(mean_row, idx)
@@ -162,12 +208,6 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
         if nps_v is not None:
             data["nps"] = nps_v
         return data
-
-    # NPS: replace the individual-code choice list with the 3 fixed groups
-    # (Promoters/Passives/Detractors, in the order configured in
-    # datatable.json — see CLAUDE.md Step 3c), keyed by "0"/"1"/"2".
-    if group_rows:
-        choices = [{"code": str(i), "label": row["label"]} for i, row in enumerate(group_rows)]
 
     # Total column
     total_data: dict = {}
@@ -183,7 +223,6 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
             columns.append({"label": bc.get("label", ""), **_col_data(idx)})
         breakdowns.append({"group_label": group_label, "columns": columns})
 
-    answer_type = block.get("answer_type", "SA")
     # Match on `question` (short code, e.g. "C4") not `label` — `label` is the
     # datatable stub's display label, which falls back to the FULL question
     # text (question_i18n) when the stub doesn't set a custom one, so it
@@ -196,7 +235,11 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
         "chart_type": _detect_chart_type(answer_type, len(choices)),
         "scale_class":     scale_info.get("scale_class"),
         "scale_high_code": scale_info.get("scale_high_code"),
-        "is_nps":     bool(group_rows),
+        "is_nps":     bool(nps_row),
+        # Range/bucket groups (NUM num_quantile / all-hidden "choices") must
+        # keep their natural emitted order (e.g. ascending age bands) rather
+        # than being re-sorted by Total percent like a Nominal SA question.
+        "preserve_order": use_group_as_choices and not nps_row,
         "choices":    choices,
         "total":      total_data,
         "breakdowns": breakdowns,

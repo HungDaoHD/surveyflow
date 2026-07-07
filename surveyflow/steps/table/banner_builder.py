@@ -26,14 +26,23 @@ def _ma_col_map(rawdata_cols: list[str]) -> dict[str, str]:
     -------
     ["S12_1", "S12_2", "S12_9"]  →  {"1": "S12_1", "2": "S12_2", "9": "S12_9"}
 
-    Uses the suffix after the last underscore as the code key.
-    Columns whose suffix is not purely numeric (e.g. open-text ``_o9``) are skipped.
+    Uses the suffix after the last underscore as the code key. Columns whose
+    suffix is not purely numeric (e.g. open-text ``_o9``) are skipped — with
+    one exception: multiplenumber columns carry a leading ``n`` marker on
+    that suffix (``D5_n1`` → code ``"1"``, see
+    ``_patch_multiplenumber_headers`` in export_parser.py for why) — MA's own
+    plain-digit suffixes never start with ``n``, so both conventions are
+    handled here without any ambiguity between them.
     """
     result: dict[str, str] = {}
     for col in rawdata_cols:
         parts = col.rsplit("_", 1)
-        if len(parts) == 2 and parts[1].isdigit():
-            result[parts[1]] = col
+        if len(parts) != 2:
+            continue
+        suffix = parts[1]
+        code = suffix[1:] if suffix.startswith("n") and suffix[1:].isdigit() else suffix
+        if code.isdigit():
+            result[code] = col
     return result
 
 

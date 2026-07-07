@@ -10,4 +10,4 @@ from surveyflow.steps.quality.quality_step import QualityStep
 from surveyflow.steps.appendix.appendix_step import AppendixStep
 
 __all__ = ["Pipeline", "PipelineConfig", "QMeClient", "FetchStep", "IngestionStep", "TableStep", "QualityStep", "AppendixStep"]
-__version__ = "0.5.8"
+__version__ = "0.5.9"

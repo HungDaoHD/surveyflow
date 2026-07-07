@@ -17,7 +17,9 @@ from pathlib import Path
 STUB_TYPES = {
     "singlechoice", "multiplechoice",
     "matrix_singlechoice", "matrix_multiplechoice", "matrix_numeric",
+    "singlenumber", "multiplenumber",
     "SA", "MA", "Matrix_SA", "Matrix_MA", "Matrix_NUM",
+    "NUM", "multiplenumber",
 }
 BANNER_TYPES = {
     "singlechoice", "multiplechoice",

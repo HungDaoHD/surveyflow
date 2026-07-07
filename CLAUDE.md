@@ -725,11 +725,43 @@ Dùng trong table item có `matrix_orientation: "horizontal"`.
 ### Stub rules
 - One entry per question
 - `stats` options: `"base"`, `"percent"`, `"t2b"`, `"b2b"`, `"mean"`, `"std"`, `"se"`
-- Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`
+- Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
   - Matrix questions automatically expand into one block per row (sub-question)
   - When `banner_matrix` is active, matrix questions use paired mode instead
   - When `matrix_orientation: "horizontal"` is active, matrix rows → banner sub-columns, choices → stub rows
-- Excluded automatically: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
+  - **`NUM`** (câu số đơn, VD tuổi): `"percent"` tự sinh 1 row cho từng giá trị số xuất hiện trong data,
+    sort **giảm dần** (lớn → nhỏ) — khác FT (sort chữ cái, dùng cho text). `"mean"/"std"/"se"/"min"/"max"`
+    tính trực tiếp trên giá trị số gốc (không cần `factor`, khác SA/Matrix_SA Ordinal).
+    - **Mặc định LUÔN áp dụng khi Claude thêm câu NUM vào stub — không cần user yêu cầu riêng**
+      (giống Step 3c cho Ordinal, ranking Top3+Overall): thêm `"mean"` vào `stats` + thêm
+      `"num_quantile": 4` vào stub entry. Pipeline tự tính 4 bin ~bằng nhau về số respondent từ
+      phân bố tổng **mỗi lần chạy table** — không cần group thủ công, không cần user xác nhận trước:
+      ```json
+      { "question": "S3_1", "stats": ["base", "percent", "mean"], "num_quantile": 4 }
+      ```
+    - **Đổi số nhóm** (VD "chia 6 nhóm"): sửa giá trị `num_quantile`.
+    - **Group range cố định thay vì quantile** (VD user muốn đúng thập kỷ tuổi "20-29"/"30-39" thay vì
+      chia đều respondent): bỏ `num_quantile`, thay bằng `"choices"` tĩnh theo cơ chế group thống nhất
+      (giống group T2B/B2B) — mỗi giá trị gộp vào 1 group cần thêm `{ "code": "<value>", "hidden": true }`:
+      ```json
+      { "question": "S3_1", "stats": ["base", "percent", "mean"],
+        "choices": [
+          { "codes": ["20","21","22","23","24"], "label": "20-24" },
+          { "codes": ["25","26","27","28","29","30"], "label": "25-30" },
+          { "code": "20", "hidden": true }, { "code": "21", "hidden": true }
+        ]
+      }
+      ```
+      Dùng `python .skill_work/fieldcheck-dp/scripts/group_numeric.py <rawdata.csv> <metadata.json>
+      --question S3_1 [--width N | --quantile N]` để xem trước bin/size trước khi chọn. Nếu stub
+      entry có cả `"choices"` lẫn `num_quantile`, `"choices"` luôn thắng (override).
+    - **Không group gì cả** (user yêu cầu giữ từng giá trị riêng lẻ): bỏ cả `"choices"` lẫn
+      `num_quantile` — pipeline hiện đủ mỗi giá trị số 1 row (sort giảm dần).
+  - **`multiplenumber`** (câu số theo nhiều category, VD phân bổ chi tiêu theo từng khoản mục): mỗi
+    choice có 1 cột số riêng trong rawdata — `"percent"` = % respondents có nhập giá trị cho category đó;
+    `"mean"/"std"/"se"/"min"/"max"` tính trên giá trị số của riêng category đó (không phải toàn câu).
+- Excluded automatically: `FT`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
+  (FT vẫn xử lý riêng qua Workflow C — quá nhiều giá trị unique để liệt kê thẳng như NUM)
 - **Stub order follows datatable.json** — pipeline outputs questions in the order they appear
 
 #### row_group — nhóm matrix questions theo shared row headers
@@ -808,10 +840,12 @@ Câu `answer_type: "ranking"` (PVV xếp hạng N items) **mặc định luôn t
 - Max 4-5 banner groups + Total
 
 **Stub:** Include all codeable questions sorted by position:
-- `SA`, `MA`, `Matrix_SA`, `Matrix_MA`
+- `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
 - Default stats: `["base", "percent"]`
 - SA/Matrix_SA với `scale_class: "Ordinal"` → `["base", "percent", "mean"]`
-- Skip: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
+- `NUM`/`multiplenumber` → `["base", "percent", "mean"]` (percent = category breakdown, xem Stub rules)
+- `NUM` → luôn thêm `"num_quantile": 4` (xem Stub rules — quantile group mặc định, không cần hỏi)
+- Skip: `FT`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
 
 ---
 
@@ -853,6 +887,11 @@ theo `sub_title`), `--start-page N` (số trang bắt đầu).
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải
 - `bar_horizontal` (MA) → bar ngang Total + các cột breakdown bên phải
 - `bar_vertical` (SA >5) → cột dọc Total + các cột breakdown bên phải
+- **`NUM`** → luôn `donut_stacked` như SA-Ordinal — mỗi bin `num_quantile`/range group là 1 slice,
+  giữ nguyên thứ tự bin (không sort theo %), donut hole vẫn hiện "Mean: X" (mean thật của cả câu).
+- **`multiplenumber`** → luôn `donut_stacked` như SA-Ordinal, nhưng % mỗi slice tính từ **mean per
+  category đã normalize** (không phải % respondents trả lời category đó — số đó không cộng đủ 100%).
+  Không hiện "Mean: X" ở donut hole (không có 1 mean tổng duy nhất, mỗi category có mean riêng).
 
 > ⚠️ **Self-contained — KHÔNG cần `documents/temp.pptx` lúc chạy.**
 > Style chart nằm sẵn trong `surveyflow/chart_templates/{bar,col,donut,stacked}.xml`.
@@ -927,6 +966,10 @@ output/SURVEY_NAME/
 | "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
 | "thang đo tần suất bị đảo, mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |
 | "thêm câu ranking vào stub / gộp slide ranking lại" | Tách thành 2 stub entries: Top 3 (`ranking_mode: "rank_dist", ranking_top_n: 3`) + Overall (`ranking_mode: "any_rank"`) — xem mục "ranking — mặc định Top 3 + Overall" |
+| "thêm câu NUM vào stub" | Tự động thêm `"mean"` vào `stats` + `"num_quantile": 4` — không cần hỏi/xác nhận trước |
+| "chia N nhóm thay vì 4" | Sửa giá trị `num_quantile` trong stub entry của câu NUM đó |
+| "group NUM theo range cố định (VD thập kỷ tuổi)" | Bỏ `num_quantile`, thay bằng `"choices"` tĩnh (group + hidden) — xem mục NUM trong Stub rules |
+| "không group tuổi/số, giữ từng giá trị" | Bỏ cả `"choices"` lẫn `num_quantile` khỏi stub entry của câu NUM — mỗi giá trị hiện riêng |
 
 ---
 

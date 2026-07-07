@@ -764,6 +764,22 @@ Dùng `row_group: true` khi muốn nhóm nhiều câu matrix có chung `choices_
 - `r10` = sub-question có `row_index == 10` trong metadata
 - Dùng được với mọi matrix type, ngoài `row_group`
 
+#### ranking — mặc định Top 3 + Overall (any rank)
+
+Câu `answer_type: "ranking"` (PVV xếp hạng N items) **mặc định luôn tách thành 2 stub entries** khi thêm vào datatable.json — không cần user yêu cầu riêng, tự động để tránh việc appendix sinh ra 1 slide/vị trí xếp hạng (VD 16 items → 16 vị trí → rất nhiều slide, phần lớn base quá nhỏ ở các rank cao):
+
+```json
+{ "question": "Q27_2", "label": null, "stats": ["base", "percent"],
+  "ranking_mode": "rank_dist", "ranking_top_n": 3 },
+{ "question": "Q27_2", "label": null, "stats": ["base", "percent"],
+  "ranking_mode": "any_rank" }
+```
+
+- **Top 3** (`ranking_mode: "rank_dist", ranking_top_n: 3`) → chỉ sinh block Rank 1/2/3 (bỏ Rank 4+ vì base thường quá nhỏ để báo cáo % đáng tin cậy) — mỗi rank vẫn là 1 câu SA-style donut+stack riêng (mutually exclusive: mỗi respondent có đúng 1 item ở mỗi rank).
+- **Overall** (`ranking_mode: "any_rank"`) → gộp tất cả vị trí thành 1 block duy nhất, mỗi item = % respondents từng xếp hạng item đó ở BẤT KỲ vị trí nào (không mutually exclusive, giống MA) — appendix tự động render block này như **câu MA / bar chart** (không phải donut), vì % các item không cộng lại 100%.
+- Muốn giữ nhiều hơn Top 3 (VD Top 5) → đổi `ranking_top_n: 5`.
+- Slide title/Q-label của appendix tự ghép mã + nội dung câu ranking gốc vào từng sub-block, VD `Q27_2-Rank 1`, `Q27_2-Overall` — không cần cấu hình thêm.
+
 ### Tables rules
 - Khi khởi tạo lần đầu: tạo đúng theo lựa chọn của user ở Step 4
 - Sau khi đã có datatable.json: không thay đổi `tables` trừ khi user yêu cầu
@@ -910,6 +926,7 @@ output/SURVEY_NAME/
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó trong metadata.json — chỉ Ordinal mới tự thêm `mean` |
 | "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
 | "thang đo tần suất bị đảo, mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |
+| "thêm câu ranking vào stub / gộp slide ranking lại" | Tách thành 2 stub entries: Top 3 (`ranking_mode: "rank_dist", ranking_top_n: 3`) + Overall (`ranking_mode: "any_rank"`) — xem mục "ranking — mặc định Top 3 + Overall" |
 
 ---
 

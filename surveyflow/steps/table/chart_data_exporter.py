@@ -268,7 +268,36 @@ def export_chart_data(
                 q = _process_stub(block, total_idx, breakdown_groups, scale_by_label)
                 if q:
                     questions_out.append(q)
-            elif btype in ("row_group", "ranking"):
+            elif btype == "ranking":
+                # Sub-blocks are per-rank-position ("Rank 1", "Rank 2", …) or a
+                # single flat "any rank" block — neither carries the actual
+                # ranking question's own code/wording (only the parent
+                # RankingBlock does: "question"="Q27_2", "label"=full text),
+                # so each slide would otherwise show just "RANK1." / "Rank 1"
+                # with no link back to the source question. Combine the
+                # parent's question code + label onto every sub-block before
+                # rendering, e.g. "Q27_2-Rank 1".
+                parent_q     = block.get("question", "")
+                parent_label = block.get("label", "")
+                mode = block.get("mode", "rank_dist")
+                for rank_num, sub in enumerate(block.get("sub_blocks", []), start=1):
+                    suffix = f"Rank {rank_num}" if mode == "rank_dist" else "Overall"
+                    sub = {
+                        **sub,
+                        "question": f"{parent_q}-{suffix}" if parent_q else suffix,
+                        "label": f"{parent_label} — {suffix}" if parent_label else suffix,
+                    }
+                    if mode == "any_rank":
+                        # any_rank's rows are "% ranked at ANY position", one
+                        # independent percent per item (not mutually
+                        # exclusive, don't sum to 100%) — same shape as an MA
+                        # question, so it must chart/label as MA (bar chart),
+                        # not the donut used for the per-rank-position blocks.
+                        sub["answer_type"] = "MA"
+                    q = _process_stub(sub, total_idx, breakdown_groups, scale_by_label)
+                    if q:
+                        questions_out.append(q)
+            elif btype == "row_group":
                 for sub in block.get("sub_blocks", []):
                     q = _process_stub(sub, total_idx, breakdown_groups, scale_by_label)
                     if q:

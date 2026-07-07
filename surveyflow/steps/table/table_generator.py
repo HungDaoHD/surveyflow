@@ -1557,6 +1557,14 @@ def compute_table(
                             _cf_mx = _extract_factors_from_choices(sc.get("choices", []))
                             _mf = _cf_mx or sc.get("factors") or sc.get("mean_factor")
                             if not _mf:
+                                logger.warning(
+                                    "%s%s_r%s: stat 'mean' requested but no factor could be "
+                                    "resolved -- expected per-choice {\"code\":.., \"factor\":..} "
+                                    "entries in \"choices\", or a top-level \"factors\"/\"mean_factor\" "
+                                    "dict (a bare top-level \"factor\" key is NOT recognized). "
+                                    "Mean will silently be 0.0 for this row.",
+                                    _pfx, q.upper(), sub_meta.get("row_index", row_label),
+                                )
                                 sub_rows.append(StubRow(
                                     label=STAT_LABELS[stat], row_type=stat,
                                     counts={i: 0 for i in range(n)},
@@ -2112,6 +2120,14 @@ def compute_table(
                         _cf = _extract_factors_from_choices(sc.get("choices", []))
                         mean_factor = _cf or sc.get("factors") or sc.get("mean_factor")
                         if not mean_factor:
+                            logger.warning(
+                                "%s%s: stat '%s' requested but no factor could be resolved -- "
+                                "expected per-choice {\"code\":.., \"factor\":..} entries in "
+                                "\"choices\", or a top-level \"factors\"/\"mean_factor\" dict "
+                                "(a bare top-level \"factor\" key is NOT recognized). "
+                                "%s will silently be 0.0 for this question.",
+                                _pfx, q.upper(), stat, STAT_LABELS[stat],
+                            )
                             rows.append(StubRow(
                                 label=STAT_LABELS[stat], row_type=stat,
                                 counts={i: 0 for i in range(n)},

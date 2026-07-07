@@ -301,11 +301,16 @@ thuộc thang đo.
 > - Nhập 'all' để lấy tất cả
 > - Hoặc nhập số câu cách nhau bằng dấu phẩy: Q1, Q5, Q8, ..."
 
-→ Nếu "all": thêm tất cả SA/MA/Matrix theo thứ tự position, stats mặc định `["base", "percent"]`
+→ Nếu "all": thêm tất cả SA/MA/Matrix/NUM/multiplenumber theo thứ tự position, stats mặc định
+  `["base", "percent"]`
 → Nếu chỉ định cụ thể: chỉ thêm các câu đó theo đúng thứ tự user nhập
 → **Câu SA/Matrix_SA có `scale_class: "Ordinal"` trong metadata.json** → tự động thêm `"mean"` vào
   `stats` (`["base", "percent", "mean"]`), không cần user yêu cầu riêng. Câu Nominal hoặc
   không có `scale_class` thì giữ mặc định `["base", "percent"]`.
+→ **Câu `NUM`** → LUÔN tự động thêm `"mean"` vào `stats` + thêm `"num_quantile": 4` vào stub entry,
+  không cần user yêu cầu riêng (xem Stub rules mục NUM).
+→ **Câu `multiplenumber`** → LUÔN tự động thêm `"mean"` vào `stats` (`["base", "percent", "mean"]`),
+  không cần user yêu cầu riêng (xem Stub rules mục multiplenumber).
 
 ### Step 5 — Run pipeline (table-only)
 

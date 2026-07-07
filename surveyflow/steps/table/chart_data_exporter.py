@@ -120,6 +120,12 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
 
     # Base row for N counts
     base_row = next((r for r in rows if r.get("row_type") == "base"), None)
+    mean_row = next((r for r in rows if r.get("row_type") == "mean"), None)
+    nps_row  = next((r for r in rows if r.get("row_type") == "nps"), None)
+    # NPS questions (Step 3c: "nps" stat + Promoters/Passives/Detractors
+    # choices groups) — the chart shows only these 3 groups instead of every
+    # individual code, always in this fixed order (never re-sorted).
+    group_rows = [r for r in rows if r.get("row_type") == "group"] if nps_row else []
 
     def _base_at(idx: int) -> int:
         if base_row is None:
@@ -127,8 +133,19 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
         c = base_row.get("counts", [])
         return int(c[idx]) if idx < len(c) else 0
 
+    def _stat_at(row: dict | None, idx: int) -> float | None:
+        if row is None:
+            return None
+        vals = row.get("values", [])
+        return round(float(vals[idx]), 2) if idx < len(vals) else None
+
     def _percents_at(idx: int) -> dict[str, float]:
         out: dict[str, float] = {}
+        if group_rows:
+            for i, row in enumerate(group_rows):
+                vals = row.get("values", [])
+                out[str(i)] = round(float(vals[idx]), 4) if idx < len(vals) else 0.0
+            return out
         for row in rows:
             if row.get("row_type") == "percent" and row.get("code") is not None:
                 vals = row.get("values", [])
@@ -136,13 +153,26 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
                 out[str(row["code"])] = round(v, 4)
         return out
 
+    def _col_data(idx: int) -> dict:
+        data = {"base": _base_at(idx), "percents": _percents_at(idx)}
+        mean_v = _stat_at(mean_row, idx)
+        if mean_v is not None:
+            data["mean"] = mean_v
+        nps_v = _stat_at(nps_row, idx)
+        if nps_v is not None:
+            data["nps"] = nps_v
+        return data
+
+    # NPS: replace the individual-code choice list with the 3 fixed groups
+    # (Promoters/Passives/Detractors, in the order configured in
+    # datatable.json — see CLAUDE.md Step 3c), keyed by "0"/"1"/"2".
+    if group_rows:
+        choices = [{"code": str(i), "label": row["label"]} for i, row in enumerate(group_rows)]
+
     # Total column
     total_data: dict = {}
     if total_idx is not None:
-        total_data = {
-            "base":    _base_at(total_idx),
-            "percents": _percents_at(total_idx),
-        }
+        total_data = _col_data(total_idx)
 
     # Breakdown groups (non-total banner columns, grouped by group_label)
     breakdowns: list[dict] = []
@@ -150,11 +180,7 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
         columns = []
         for bc in cols:
             idx = bc["_idx"]
-            columns.append({
-                "label":    bc.get("label", ""),
-                "base":     _base_at(idx),
-                "percents": _percents_at(idx),
-            })
+            columns.append({"label": bc.get("label", ""), **_col_data(idx)})
         breakdowns.append({"group_label": group_label, "columns": columns})
 
     answer_type = block.get("answer_type", "SA")
@@ -170,6 +196,7 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
         "chart_type": _detect_chart_type(answer_type, len(choices)),
         "scale_class":     scale_info.get("scale_class"),
         "scale_high_code": scale_info.get("scale_high_code"),
+        "is_nps":     bool(group_rows),
         "choices":    choices,
         "total":      total_data,
         "breakdowns": breakdowns,

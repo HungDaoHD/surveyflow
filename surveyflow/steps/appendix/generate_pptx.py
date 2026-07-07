@@ -40,7 +40,7 @@ try:
     from pptx import Presentation
     from pptx.chart.data import CategoryChartData
     from pptx.enum.chart import XL_CHART_TYPE
-    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE
     from pptx.util import Emu, Pt
     from pptx.dml.color import RGBColor
     from pptx.oxml import parse_xml
@@ -82,6 +82,30 @@ FOOTER_W, FOOTER_H = Emu(12188952), Emu(146304)
 SECTION_H = Emu(292608)         # 0.32"
 SECTION_TO_CHART = Emu(228600)  # gap from section label top to chart top
 
+# Donut plot area AND legend are both left on PowerPoint's own fully
+# automatic layout (no c:manualLayout at all) — manually pinning either
+# one was tried across several iterations (fixed ring size, fixed legend
+# position/height) and each version eventually caused some real chart to
+# render wrong (ring inconsistent size, legend spread out, legend stuck at
+# top-left, legend overlapping the ring for many-choice questions) in ways
+# that couldn't be fully predicted without live rendering. PowerPoint's own
+# auto-layout reliably avoids overlap and picks a sensible row/column
+# arrangement for legendPos="b" on its own.
+#
+# DONUT_CENTER_Y_FRAC is therefore a plain heuristic (not backed by any
+# guaranteed layout) for where the ring's visual center roughly falls, used
+# only to position the Mean/NPS overlay text in _add_donut_center_text —
+# it may be slightly off for questions with an unusually large or small
+# number of legend items, since actual ring size now varies with how much
+# room the auto-legend ends up needing.
+DONUT_CENTER_Y_FRAC = 0.38
+
+# Fraction of the stacked-chart's own allocated height reserved (at the top)
+# for the 2-line ("7.2" / "-5.0") Mean/NPS label band above each column —
+# the chart itself is shrunk by this much so the two never overlap (see
+# _build_stacked).
+STACK_MEAN_BAND_FRAC = 0.11
+
 # ── Layout A: donut + 100%-stacked (slide2 in template) ──────────────────────
 # Donut / breakdown split = 40% / 60% of the available content width.
 DT_MARGIN_L = Emu(548640)
@@ -116,6 +140,14 @@ BR_RIGHT_BOTTOM  = Emu(5715000)  # bottom of last right chart
 
 # Max breakdown groups shown per slide (Layout B right side)
 MAX_GROUPS_PER_SLIDE = 2
+
+# Max stacked-chart breakdown COLUMNS shown per slide for donut_stacked
+# (e.g. all banner groups combined can add up to 10+ columns — Area(4) +
+# Gender(2) + Age(3) + HHI(4) = 13). Split across continuation slides,
+# packing whole banner groups (never splitting one group's columns across
+# two slides) — the Total donut is re-rendered identically on every
+# continuation slide, only the stack's columns differ.
+STACK_MAX_COLS_PER_SLIDE = 10
 
 # ── Layout C: MA bar_horizontal — Total + up to 2 breakdowns, 3 equal columns ─
 BH_GAP      = Emu(182880)   # gap between columns (0.2")
@@ -178,23 +210,6 @@ DONUT_PALETTE = [
     "938953",  # brown/tan
 ]
 
-# Above this label length, PowerPoint tends to render a chart's legend as a
-# single vertical column (one entry per row) instead of flowing multiple
-# entries per row. Confirmed via real PowerPoint rendering.
-_LEGEND_SINGLE_COL_LEN = 35
-
-
-def _likely_single_column_legend(labels) -> bool:
-    """Heuristic for whether a legend will render as a single vertical
-    column. Matters specifically for STACKED charts: confirmed via real
-    PowerPoint rendering that a single-column legend displays in the
-    REVERSE of series-add order (matching the visual top-to-bottom
-    stacking), while a multi-column (multiple entries per row) legend does
-    not reverse. There's no way to precisely predict PowerPoint's own text
-    layout from Python, so this uses a practical length threshold rather
-    than exact measurement."""
-    return any(len(lbl) > _LEGEND_SINGLE_COL_LEN for lbl in labels)
-
 
 # ── Font / text helpers ───────────────────────────────────────────────────────
 
@@ -217,6 +232,13 @@ def _set_txbody_margins(tf, anchor: str = "ctr") -> None:
     tf.margin_right = 0
     tf.margin_bottom = 0
     tf.word_wrap = True
+    # python-pptx's add_textbox() defaults to <a:spAutoFit/> (resize the
+    # SHAPE to fit its text) — for short strings like "8.99"/"71.0" this
+    # shrinks the box well below the width/position we explicitly computed,
+    # which visually collapses a row of evenly-spread per-column labels
+    # toward one edge instead of staying centered under their own column.
+    # MSO_AUTO_SIZE.NONE (<a:noAutofit/>) keeps the exact box we asked for.
+    tf.auto_size = MSO_AUTO_SIZE.NONE
     bodyPr = tf._txBody.find(qn("a:bodyPr"))
     if bodyPr is not None:
         bodyPr.set("anchor", anchor)
@@ -331,7 +353,7 @@ def _shorten_labels(items: list, label_key: str = "label") -> list:
 
 # ── Chart-template cloning ────────────────────────────────────────────────────
 
-def _style_cat_axis(chartspace, *, font_pt: int = 8) -> None:
+def _style_cat_axis(chartspace, *, font_pt: int = 7) -> None:
     """Reduce font size and enable word wrap on category axis labels. No rotation."""
     sz_val = str(font_pt * 100)  # DrawingML unit: 1/100 of a point
 
@@ -362,15 +384,10 @@ def _style_cat_axis(chartspace, *, font_pt: int = 8) -> None:
         defRPr.set("sz", sz_val)
 
 
-def _style_legend(chartspace, n_categories: int, *, base_pt: int = 9, min_pt: int = 6) -> None:
-    """Shrink legend text as the category count grows and force word-wrap, so
-    every visible entry stays fully readable.
-
-    PowerPoint's legend area has a fixed height/width — long entry text that
-    doesn't fit gets clipped instead of wrapping, and with many entries at the
-    template's default 9pt some can be dropped entirely rather than shrunk.
-    Enabling wrap + scaling the font down keeps every entry visible."""
-    font_pt = base_pt if n_categories <= 6 else max(min_pt, base_pt - (n_categories - 6))
+def _style_legend(chartspace, *, font_pt: int = 7) -> None:
+    """Force legend text (item/choice names) to a fixed size across every
+    chart type, and force word-wrap so long entries stay fully readable
+    within PowerPoint's fixed legend area instead of getting clipped."""
     sz_val = str(font_pt * 100)
 
     chart_el = chartspace.find(qn("c:chart"))
@@ -412,6 +429,54 @@ def _force_pct_labels(chartspace) -> None:
             dl.insert(0, nf)
         nf.set("formatCode", '0"%"')
         nf.set("sourceLinked", "0")
+
+
+
+# CT_DLbls / CT_DLbl: elements that must come AFTER c:txPr in document order —
+# used to find the correct insertion point when txPr is missing (a plain
+# append would violate the schema if any of these are already present).
+_DLBL_AFTER_TXPR = (
+    "c:dLblPos", "c:showLegendKey", "c:showVal", "c:showCatName",
+    "c:showSerName", "c:showPercent", "c:showBubbleSize", "c:separator",
+    "c:showLeaderLines", "c:leaderLines", "c:extLst",
+)
+
+
+def _insert_txpr(dl_container):
+    """Create a <c:txPr> on a <c:dLbls>/<c:dLbl> element at the schema-correct
+    position (before dLblPos/showVal/etc., after idx/numFmt/spPr/any nested
+    dLbl), rather than blindly appending at the end."""
+    insert_at = len(dl_container)
+    for i, child in enumerate(dl_container):
+        if etree.QName(child).text in {qn(t) for t in _DLBL_AFTER_TXPR}:
+            insert_at = i
+            break
+    txPr = etree.Element(qn("c:txPr"))
+    etree.SubElement(txPr, qn("a:bodyPr"))
+    etree.SubElement(txPr, qn("a:lstStyle"))
+    dl_container.insert(insert_at, txPr)
+    return txPr
+
+
+def _style_data_labels(chartspace, *, font_pt: int = 6) -> None:
+    """Force the percent value shown on every data label (donut slice, bar/
+    column end, stacked segment — series-level default AND any per-point
+    <c:dLbl> override) to a fixed font size, across every chart type."""
+    sz_val = str(font_pt * 100)
+    for dl_container in list(chartspace.iter(qn("c:dLbls"))) + list(chartspace.iter(qn("c:dLbl"))):
+        txPr = dl_container.find(qn("c:txPr"))
+        if txPr is None:
+            txPr = _insert_txpr(dl_container)
+        p = txPr.find(qn("a:p"))
+        if p is None:
+            p = etree.SubElement(txPr, qn("a:p"))
+        pPr = p.find(qn("a:pPr"))
+        if pPr is None:
+            pPr = etree.SubElement(p, qn("a:pPr"))
+        defRPr = pPr.find(qn("a:defRPr"))
+        if defRPr is None:
+            defRPr = etree.SubElement(pPr, qn("a:defRPr"))
+        defRPr.set("sz", sz_val)
 
 
 def _hide_zero_value_labels(chartspace) -> None:
@@ -684,11 +749,17 @@ def _apply_palette(chartspace, palette: list, *, per_point: bool = False,
 
 def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
                  *, drop_legend: bool = False, per_point: bool = False,
-                 palette: list | None = None, style_cat_labels: bool = False,
-                 cat_font_pt: int = 8, legend_n: int | None = None,
+                 palette: list | None = None,
+                 cat_font_pt: int = 7, legend_n: int | None = None,
                  hide_zero_labels: bool = False, series_colors: list | None = None):
     """Add a chart, replace its XML with a deep copy of the template chartSpace,
-    then inject `chart_data` via replace_data() so template styling is kept."""
+    then inject `chart_data` via replace_data() so template styling is kept.
+
+    Item text (category axis + legend) and data-label percent text are
+    always forced to a fixed size (7pt / 6pt) for every chart type — see
+    _style_cat_axis / _style_legend / _style_data_labels. Both are no-ops
+    when the chart has no category axis (donut) or no legend, so calling
+    them unconditionally is safe."""
     gf = slide.shapes.add_chart(pptx_type, l, t, w, h, chart_data)
     cp = gf.chart_part
 
@@ -710,15 +781,15 @@ def _clone_chart(slide, tmpl_chartspace, pptx_type, l, t, w, h, chart_data,
 
     cp.chart.replace_data(chart_data)
     _force_pct_labels(cp._element)
-    if style_cat_labels:
-        _style_cat_axis(cp._element, font_pt=cat_font_pt)
+    _style_cat_axis(cp._element, font_pt=cat_font_pt)
     if legend_n is not None:
         _ensure_legend(cp._element)
-        _style_legend(cp._element, legend_n)
+    _style_legend(cp._element)
     if per_point:
         _match_point_dlbl_count(cp._element)
     if hide_zero_labels:
         _hide_zero_value_labels(cp._element)
+    _style_data_labels(cp._element)
     _apply_palette(cp._element, palette or CHART_PALETTE, per_point=per_point,
                    series_colors=series_colors)
     return cp.chart
@@ -729,9 +800,61 @@ def _v100(percents: dict, codes: list) -> list:
     return [round(percents.get(c, 0.0) * 100.0, 4) for c in codes]
 
 
+def _mean_nps_lines(data: dict) -> list[str]:
+    """['Mean: 7.2'] / ['Mean: 7.2', 'NPS: -5.0'] for a total/breakdown-column
+    dict that carries Step 3c's `mean`/`nps` stat values — Mean and NPS are
+    always separate lines (never joined on one line), and this returns []
+    when the question has no `mean` (e.g. Nominal or MA), so it's always
+    safe to call unconditionally."""
+    mean_v = data.get("mean")
+    if mean_v is None:
+        return []
+    lines = [f"Mean: {mean_v:g}"]
+    nps_v = data.get("nps")
+    if nps_v is not None:
+        lines.append(f"NPS: {nps_v:.1f}")
+    return lines
+
+
+def _mean_nps_compact(data: dict) -> list[str]:
+    """['9.24'] / ['9.24', '82.8'] — bare numbers, one per line (Mean then
+    NPS), used for the stack chart's per-column top labels. A single
+    "Mean" / "NPS" caption to the left labels the two rows once (see
+    _build_stacked), rather than repeating "Mean:"/"NPS:" prefixes on
+    every column."""
+    mean_v = data.get("mean")
+    if mean_v is None:
+        return []
+    lines = [f"{mean_v:g}"]
+    nps_v = data.get("nps")
+    if nps_v is not None:
+        lines.append(f"{nps_v:.1f}")
+    return lines
+
+
 def _col_label_with_base(col: dict) -> str:
-    """Breakdown column label + its own base, e.g. 'Male (N=120)'."""
+    """Breakdown column label + its own base, e.g. 'Male (N=120)'.
+
+    Mean/NPS (Step 3c Ordinal questions) is NOT appended here — it's shown
+    as a data label sitting on top of that column's stacked bar instead
+    (see _set_stack_top_labels), so the x-axis stays a plain category name."""
     return f"{col.get('label', '')} (N={col.get('base', 0)})"
+
+
+# Meta codes that are never part of an ordinal scale itself, even when they
+# appear alongside one — per this project's own FT-coding convention (see
+# CLAUDE.md Workflow C: 98 = "Others", 99 = "No answer"). Sorting these
+# purely by numeric code value would put them at the very top of a 1-5
+# scale (since 98/99 > 5), which is never the intended meaning.
+_ORDINAL_META_CODES = {98, 99}
+
+
+def _code_int(choice: dict) -> int | None:
+    """Parse a single choice's code as int, or None if it isn't numeric."""
+    try:
+        return int(choice["code"])
+    except (ValueError, TypeError):
+        return None
 
 
 def _sort_scale_desc(q: dict, choices: list) -> list:
@@ -744,14 +867,29 @@ def _sort_scale_desc(q: dict, choices: list) -> list:
     code 1 at the high-intensity end. `scale_high_code` (also
     Claude-classified, see CLAUDE.md Step 3c) names the code at the high end
     explicitly; sort direction is derived from whether that's the min or max
-    code. Defaults to "max code = high end" (descending by code) when
-    `scale_high_code` isn't set."""
+    code among the real scale choices (excluding meta codes below).
+    Defaults to "max code = high end" (descending by code) when
+    `scale_high_code` isn't set.
+
+    Choices with a non-numeric code, or a meta code (_ORDINAL_META_CODES),
+    are excluded from the scale sort and always appended at the end (in
+    their original relative order) — sorting them in with the real scale
+    values would place e.g. "Others"/"No answer" at the top purely because
+    98/99 is numerically larger than the scale's real range."""
     if q.get("scale_class") != "Ordinal":
         return choices
-    try:
-        codes = [int(c["code"]) for c in choices]
-    except (ValueError, TypeError):
-        return list(reversed(choices))
+
+    scale_choices, meta_choices = [], []
+    for c in choices:
+        code = _code_int(c)
+        if code is None or code in _ORDINAL_META_CODES:
+            meta_choices.append(c)
+        else:
+            scale_choices.append(c)
+    if not scale_choices:
+        return choices
+
+    codes = [_code_int(c) for c in scale_choices]
     high_code = q.get("scale_high_code")
     reverse = True
     if high_code is not None:
@@ -759,19 +897,35 @@ def _sort_scale_desc(q: dict, choices: list) -> list:
             reverse = int(high_code) != min(codes)
         except (ValueError, TypeError):
             pass
-    return sorted(choices, key=lambda c: int(c["code"]), reverse=reverse)
+    scale_choices.sort(key=_code_int, reverse=reverse)
+    return scale_choices + meta_choices
 
 
 def _order_sa_choices(q: dict, choices: list) -> list:
     """Order SA (donut_stacked) choices for both the donut and its paired
     stacked breakdown chart, so the two always agree:
 
+    - NPS questions (`is_nps`, see CLAUDE.md Step 3c): never re-sorted —
+      chart_data_exporter already emits exactly 3 choices (Promoters,
+      Passives, Detractors) in that fixed order, keyed by synthetic codes
+      "0"/"1"/"2". Sorting by scale value here would be meaningless (and
+      actively wrong) since those aren't real scale codes.
     - SA-Ordinal: sort by scale order descending (see _sort_scale_desc).
-    - SA-Nominal: sort by Total percent descending."""
+    - SA-Nominal: sort by Total percent descending, tie-broken by ascending
+      code (stable/deterministic tie-break, rather than silently depending
+      on whatever order the choices happened to arrive in — which mattered
+      in practice for questions with several 0%/tied choices)."""
+    if q.get("is_nps"):
+        return choices
     if q.get("scale_class") == "Ordinal":
         return _sort_scale_desc(q, choices)
     total_pct = q.get("total", {}).get("percents", {})
-    return sorted(choices, key=lambda c: total_pct.get(c["code"], 0), reverse=True)
+
+    def _key(c):
+        code = _code_int(c)
+        return (-total_pct.get(c["code"], 0), code if code is not None else 0)
+
+    return sorted(choices, key=_key)
 
 
 # ── Per-chart builders (each clones the matching template chart) ──────────────
@@ -830,8 +984,7 @@ def _build_breakdown_col(slide, q, group, tmpl, l, t, w, h) -> None:
     cd.categories = labels
     for col in cols:
         cd.add_series(col["label"], _v100(col.get("percents", {}), codes))
-    _clone_chart(slide, tmpl["col"], XL_CHART_TYPE.COLUMN_CLUSTERED, l, t, w, h, cd,
-                 style_cat_labels=True)
+    _clone_chart(slide, tmpl["col"], XL_CHART_TYPE.COLUMN_CLUSTERED, l, t, w, h, cd)
 
 
 def _build_breakdown_bar(slide, q, group, tmpl, l, t, w, h) -> None:
@@ -858,7 +1011,6 @@ def _build_breakdown_bar(slide, q, group, tmpl, l, t, w, h) -> None:
     for col in cols:
         cd.add_series(col["label"], _v100(col.get("percents", {}), codes))
     _clone_chart(slide, tmpl["bar"], XL_CHART_TYPE.BAR_CLUSTERED, l, t, w, h, cd,
-                 style_cat_labels=True,
                  legend_n=len(cols) if len(cols) > 1 else None)
 
 
@@ -887,10 +1039,46 @@ def _build_breakdown_stacked(slide, q, group, tmpl, l, t, w, h, *,
         )
     if horizontal:
         _clone_chart(slide, tmpl["bar"], XL_CHART_TYPE.BAR_STACKED_100,
-                     l, t, w, h, cd, style_cat_labels=True, cat_font_pt=7)
+                     l, t, w, h, cd)
     else:
         _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100,
-                     l, t, w, h, cd, style_cat_labels=True, cat_font_pt=7)
+                     l, t, w, h, cd)
+
+
+def _add_multiline_text(slide, left, top, width, height, lines: list[str], *,
+                        font_size: int = 9, bold: bool = True,
+                        color: RGBColor | None = None) -> None:
+    """Small centered text box with each string in `lines` as its own
+    paragraph (never joined with a separator onto one line)."""
+    txb = slide.shapes.add_textbox(left, top, width, height)
+    tf = txb.text_frame
+    _set_txbody_margins(tf, anchor="ctr")
+    for i, line in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text = line
+        r.font.size = Pt(font_size)
+        r.font.bold = bold
+        if color:
+            r.font.color.rgb = color
+        _set_run_arial(r)
+
+
+def _add_donut_center_text(slide, l, t, w, h, lines: list[str]) -> None:
+    """Small Mean/NPS text box sitting inside the donut's hole (holeSize=55%
+    of radius, see donut.xml). The chart's own legend is at the bottom
+    (legendPos="b"), so the ring's visual center sits somewhat above the
+    shape's full vertical midpoint — approximated here since exact
+    placement depends on PowerPoint's own auto plot-area layout (no manual
+    layout is set in the template), which can't be measured without
+    rendering; nudge DONUT_CENTER_Y_FRAC if it's off once seen rendered."""
+    box_w = Emu(int(w) * 2 // 5)
+    box_h = Emu(int(h) // 6)
+    box_l = Emu(int(l) + (int(w) - int(box_w)) // 2)
+    box_t = Emu(int(t) + int(int(h) * DONUT_CENTER_Y_FRAC) - int(box_h) // 2)
+    _add_multiline_text(slide, box_l, box_t, box_w, box_h, lines,
+                        font_size=9, bold=True, color=C_NAVY)
 
 
 def _build_donut(slide, q, tmpl, l, t, w, h) -> None:
@@ -911,23 +1099,66 @@ def _build_donut(slide, q, tmpl, l, t, w, h) -> None:
     _clone_chart(slide, tmpl["donut"], XL_CHART_TYPE.DOUGHNUT, l, t, w, h, cd,
                  per_point=True, palette=DONUT_PALETTE, legend_n=len(labels),
                  hide_zero_labels=True)
+    center_lines = _mean_nps_lines(q.get("total", {}))
+    if center_lines:
+        _add_donut_center_text(slide, l, t, w, h, center_lines)
+
+
+def _add_stack_top_labels(slide, l, t, w, band_h, lines_per_col: list[list[str]]) -> None:
+    """A small 2-line ("7.2" / "-5.0") Mean/NPS textbox per column, each one
+    centered on that column's own horizontal slot (w / n, matching how
+    PowerPoint centers a category's bar within its own equal-width slot —
+    same assumption category axes use by default), inside the reserved top
+    band (l, t, w, band_h). The caller has already shrunk the actual chart
+    to start below this band, so there's no dependency on estimating where
+    the real chart's plot area happens to render; the two literally cannot
+    overlap.
+
+    A single 2-line "Mean" / "NPS" caption is added once, to the left of
+    the first column (in the gap before the chart's own left edge), lined
+    up row-for-row with the per-column values — rather than repeating
+    "Mean:"/"NPS:" labels on every column."""
+    n = len(lines_per_col)
+    if n == 0:
+        return
+    col_w = int(w) // n
+    box_w = Emu(int(col_w * 0.92))
+    box_h = Emu(int(band_h))
+
+    # Only label "NPS" if at least one column actually has an nps value —
+    # a Mean-only Ordinal question (no NPS stat) should show just "Mean".
+    has_nps = any(len(lines) > 1 for lines in lines_per_col)
+    caption = ["Mean", "NPS"] if has_nps else ["Mean"]
+    caption_l = Emu(max(0, int(l) - int(box_w)))
+    _add_multiline_text(slide, caption_l, Emu(int(t)), box_w, box_h,
+                        caption, font_size=7, bold=True, color=C_QBASE)
+
+    for i, lines in enumerate(lines_per_col):
+        if not lines:
+            continue
+        col_l = int(l) + i * col_w
+        box_l = Emu(col_l + (col_w - int(box_w)) // 2)
+        _add_multiline_text(slide, box_l, Emu(int(t)), box_w, box_h, lines,
+                            font_size=7, bold=True, color=C_NAVY)
 
 
 def _build_stacked(slide, q, breakdowns, tmpl, l, t, w, h) -> None:
     """100%-stacked columns — series per choice, using the same DONUT_PALETTE
     colors per choice so the two charts agree. Shows every choice (incl.
     those that are 0% everywhere) so the legend always matches the donut's
-    full list.
+    full list — donut's post-sort order (_order_sa_choices) is the source of
+    truth for both the stack's item order (within a column) and its legend
+    order.
 
-    Legend order (SA-Nominal only): confirmed via real PowerPoint rendering
-    that a multi-column legend (short labels) displays in literal series-add
-    order, while a single-column legend (long labels, wraps one-per-row)
-    displays REVERSED — so for SA-Nominal questions, series are added
-    choices-reversed only when _likely_single_column_legend() predicts the
-    latter, keeping the rendered legend matching the donut's order either
-    way. SA-Ordinal questions skip this compensation and always use plain
-    scale order, since their order is meaningful on its own (not just a
-    percent ranking) and shouldn't be perturbed by a label-length heuristic."""
+    Series are always added in the same order as the donut's sorted choices
+    (SA-Nominal / SA-Ordinal / Matrix-SA alike) — no reversal. PowerPoint's
+    legend for THIS chart can render in reverse of series-add order when
+    labels are long enough to force a single-column legend layout (observed
+    on long-label questions like S10/A5/B6) — accepted as a known edge case
+    rather than compensated for, since a label-length-based reversal rule
+    was tried and rejected: it fixed those long-label cases but flipped the
+    order on other (shorter-label) Nominal questions that were already
+    correct without any reversal."""
     choices = q["choices"]
     all_cols, xlabels = [], []
     for bd in breakdowns:
@@ -940,25 +1171,32 @@ def _build_stacked(slide, q, breakdowns, tmpl, l, t, w, h) -> None:
     color_map = {c["code"]: DONUT_PALETTE[i % len(DONUT_PALETTE)]
                  for i, c in enumerate(choices)}
     shortened = {c["code"]: lbl for c, lbl in zip(choices, _shorten_labels(choices))}
-    is_nominal = q.get("scale_class") != "Ordinal"
-    insertion_order = (
-        list(reversed(choices))
-        if is_nominal and _likely_single_column_legend(shortened.values())
-        else choices
-    )
     cd = CategoryChartData()
     cd.categories = xlabels
     series_colors = []
-    for choice in insertion_order:
+    for choice in choices:
         cd.add_series(
             shortened[choice["code"]],
             [round(col.get("percents", {}).get(choice["code"], 0.0) * 100.0, 4)
              for col in all_cols],
         )
         series_colors.append(color_map[choice["code"]])
-    _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100, l, t, w, h, cd,
-                 style_cat_labels=True, cat_font_pt=7, series_colors=series_colors,
-                 hide_zero_labels=True)
+
+    # Mean/NPS (Step 3c Ordinal questions) sits above each column, in a
+    # reserved band carved out of the TOP of this function's own (l, t, w, h)
+    # allocation — the chart itself is shrunk/shifted down to make room, so
+    # the label band and the chart body never overlap.
+    mean_lines = [_mean_nps_compact(col) for col in all_cols]
+    if any(mean_lines):
+        chart_t = Emu(int(t) + int(int(h) * STACK_MEAN_BAND_FRAC))
+        chart_h = Emu(int(h) - int(int(h) * STACK_MEAN_BAND_FRAC))
+        _add_stack_top_labels(slide, l, t, w, int(int(h) * STACK_MEAN_BAND_FRAC), mean_lines)
+    else:
+        chart_t, chart_h = t, h
+
+    _clone_chart(slide, tmpl["stacked"], XL_CHART_TYPE.COLUMN_STACKED_100, l, chart_t, w, chart_h, cd,
+                series_colors=series_colors,
+                hide_zero_labels=True, legend_n=len(choices))
 
 
 # ── Slide builder ─────────────────────────────────────────────────────────────
@@ -1055,20 +1293,86 @@ def _safe_print(msg: str) -> None:
         print(msg.encode("ascii", errors="replace").decode("ascii"))
 
 
+def _select_table(tables: list[dict], table_idx: int | None) -> dict:
+    """Pick which chart_data.json table to render into the appendix.
+
+    Explicit ``table_idx`` always wins (CLI ``--table N`` override).
+    Otherwise auto-select by ``sub_title`` (case-insensitive): prefer a
+    table named "Appendix", fall back to "General". Raises ValueError if
+    neither exists — appendix generation only ever targets a single table,
+    it never silently renders every table in the file.
+    """
+    if table_idx is not None:
+        for tbl in tables:
+            if tbl.get("table_index") == table_idx:
+                return tbl
+        raise ValueError(f"No table with table_index={table_idx} in chart_data.json")
+
+    by_sub_title = {str(t.get("sub_title", "")).strip().lower(): t for t in tables}
+    for name in ("appendix", "general"):
+        if name in by_sub_title:
+            return by_sub_title[name]
+
+    available = ", ".join(repr(t.get("sub_title", "")) for t in tables) or "(none)"
+    raise ValueError(
+        "No table named 'Appendix' or 'General' found in chart_data.json "
+        f"(available sub_title values: {available}). Add a table with "
+        "sub_title \"Appendix\" (or \"General\") to datatable.json."
+    )
+
+
+def _chunk_breakdowns_by_col_count(breakdowns: list, max_cols: int) -> list[list]:
+    """Split a list of banner groups across as few slides as possible
+    (never splitting one group's own columns across two slides), with each
+    slide's total column count as EVEN as possible — rather than greedily
+    filling each slide to the brim before starting the next (which can
+    produce a lopsided e.g. 9-and-4 split), this computes the minimum
+    slide count (`ceil(total / max_cols)`) and distributes whole groups
+    across that many slides using LPT (longest-processing-time-first) bin
+    balancing: largest groups placed first, each into whichever slide
+    currently has the fewest columns — e.g. Area(4)/Gender(2)/Age(3)/HHI(4)
+    = 13 cols → 2 slides balances to 7/6 instead of greedy's 9/4."""
+    total = sum(len(bd.get("columns", [])) for bd in breakdowns)
+    if total <= max_cols:
+        return [breakdowns]
+
+    n_slides = -(-total // max_cols)  # ceil(total / max_cols)
+    order = sorted(range(len(breakdowns)),
+                    key=lambda i: -len(breakdowns[i].get("columns", [])))
+    bucket_idxs: list[list[int]] = [[] for _ in range(n_slides)]
+    bucket_totals = [0] * n_slides
+    for i in order:
+        j = min(range(n_slides), key=lambda k: bucket_totals[k])
+        bucket_idxs[j].append(i)
+        bucket_totals[j] += len(breakdowns[i].get("columns", []))
+
+    chunks = [
+        [breakdowns[i] for i in sorted(idxs)]
+        for idxs in bucket_idxs if idxs
+    ]
+    chunks.sort(key=lambda chunk: breakdowns.index(chunk[0]))
+    return chunks
+
+
 def generate(chart_data_path: str, output_path: str, *,
              templates_dir: str | None = None, table_idx: int | None = None,
              start_page: int = 1) -> None:
     """Generate a PowerPoint appendix from chart_data.json.
 
+    Renders exactly one table (never "all tables merged") — see
+    ``_select_table`` for the selection rule.
+
     Args:
         chart_data_path: Path to chart_data.json produced by the pipeline.
         output_path:     Where to write the .pptx file.
         templates_dir:   Override chart template XML directory (default: bundled).
-        table_idx:       If set, only export this table index (0-based).
+        table_idx:       If set, export this table index (0-based) instead of
+                          auto-selecting by sub_title.
         start_page:      Starting page number shown in slides (default: 1).
     """
     data = json.loads(Path(chart_data_path).read_text(encoding="utf-8"))
     tmpl = _load_templates(templates_dir or _default_templates_dir())
+    tbl = _select_table(data.get("tables", []), table_idx)
 
     prs = Presentation()
     prs.slide_width  = SW
@@ -1076,29 +1380,41 @@ def generate(chart_data_path: str, output_path: str, *,
     blank_layout = prs.slide_layouts[6]
 
     page = start_page
-    for tbl in data.get("tables", []):
-        if table_idx is not None and tbl.get("table_index") != table_idx:
+    for q in tbl.get("questions", []):
+        if q.get("total", {}).get("base", 0) == 0:
             continue
-        for q in tbl.get("questions", []):
-            if q.get("total", {}).get("base", 0) == 0:
-                continue
-            _safe_print(f"  slide {page:>3}: {q.get('question', ''):<12}  {q.get('label', '')}")
-            chart_type = q.get("chart_type", "bar_vertical")
-            breakdowns = q.get("breakdowns", [])
+        _safe_print(f"  slide {page:>3}: {q.get('question', ''):<12}  {q.get('label', '')}")
+        chart_type = q.get("chart_type", "bar_vertical")
+        breakdowns = q.get("breakdowns", [])
 
-            # donut_stacked: all breakdowns go into one stacked chart — no split needed
-            if chart_type == "donut_stacked" or len(breakdowns) <= MAX_GROUPS_PER_SLIDE:
+        if chart_type == "donut_stacked":
+            total_cols = sum(len(bd.get("columns", [])) for bd in breakdowns)
+            if total_cols <= STACK_MAX_COLS_PER_SLIDE:
                 _build_slide(prs, blank_layout, q, page, tmpl)
                 page += 1
             else:
-                # Split into continuation slides, max MAX_GROUPS_PER_SLIDE groups each
-                chunks = [breakdowns[i:i + MAX_GROUPS_PER_SLIDE]
-                          for i in range(0, len(breakdowns), MAX_GROUPS_PER_SLIDE)]
+                # Split the stack's columns across continuation slides
+                # (whole banner groups per slide, see
+                # _chunk_breakdowns_by_col_count) — the Total donut is
+                # re-rendered identically on every one of them.
+                chunks = _chunk_breakdowns_by_col_count(breakdowns, STACK_MAX_COLS_PER_SLIDE)
                 for ci, chunk in enumerate(chunks):
                     q_slide = {**q, "breakdowns": chunk}
                     _build_slide(prs, blank_layout, q_slide, page, tmpl,
                                  title_suffix=f"({ci + 1})")
                     page += 1
+        elif len(breakdowns) <= MAX_GROUPS_PER_SLIDE:
+            _build_slide(prs, blank_layout, q, page, tmpl)
+            page += 1
+        else:
+            # Split into continuation slides, max MAX_GROUPS_PER_SLIDE groups each
+            chunks = [breakdowns[i:i + MAX_GROUPS_PER_SLIDE]
+                      for i in range(0, len(breakdowns), MAX_GROUPS_PER_SLIDE)]
+            for ci, chunk in enumerate(chunks):
+                q_slide = {**q, "breakdowns": chunk}
+                _build_slide(prs, blank_layout, q_slide, page, tmpl,
+                             title_suffix=f"({ci + 1})")
+                page += 1
 
     prs.save(output_path)
     _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides)")
@@ -1116,7 +1432,8 @@ def main(argv=None) -> None:
     ap.add_argument("--templates", default=None,
                     help="Chart-template dir (default: bundled package templates)")
     ap.add_argument("--table", type=int, default=None,
-                    help="Export only this table index (default: all)")
+                    help="Export this table index (default: auto-select by "
+                         "sub_title — 'Appendix', else 'General')")
     ap.add_argument("--start-page", type=int, default=1, dest="start_page",
                     help="Starting page number (default: 1)")
     args = ap.parse_args(argv)

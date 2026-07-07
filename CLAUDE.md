@@ -184,6 +184,94 @@ thứ tự SAI (thấp→cao thay vì cao→thấp). Khi thấy trường hợp 
 Bỏ qua field này nếu code lớn nhất đã là đầu "cao nhất" (trường hợp thường gặp — satisfaction,
 agreement, purchase intent đều theo chiều này).
 
+### Step 3c — Detect Ordinal (tự động thêm stats/factor/group codes)
+
+Ngay sau Step 3b (đã có `scale_class`/`scale_high_code` trong `metadata.json`), khi thêm
+một câu SA/Matrix_SA có `scale_class: "Ordinal"` vào `stub` của `datatable.json`, Claude tự
+động bổ sung cấu hình sau — không cần user yêu cầu riêng:
+
+**1. Tất cả câu Ordinal → thêm `"mean"` vào `stats` + LUÔN thêm `"factor"` cho từng choice
+(bắt buộc, không có ngoại lệ).**
+
+> ⚠️ **`mean` cho SA/Matrix_SA bắt buộc phải có `factor`** — pipeline (`table_generator.py`)
+> không có đường fallback tính mean trực tiếp trên code gốc; nếu thiếu `factor` cho dù chỉ
+> 1 choice, toàn bộ `mean` của câu đó sẽ trả về **0.0** một cách âm thầm (không lỗi). Vì vậy
+> **luôn** thêm `factor` cho mọi code thật của thang đo (bỏ qua meta code 98/99), kể cả khi
+> thang đo không đảo ngược.
+
+Thang đo **không** đảo ngược (`scale_high_code` bỏ trống hoặc = code lớn nhất) → `factor`
+= chính code đó (identity mapping):
+
+```json
+{ "question": "C4", "stats": ["base", "percent", "mean"],
+  "choices": [
+    { "code": 1, "factor": 1 },
+    { "code": 2, "factor": 2 },
+    { "code": 3, "factor": 3 },
+    { "code": 4, "factor": 4 },
+    { "code": 5, "factor": 5 }
+  ]
+}
+```
+
+Thang đo **bị đảo ngược** (`scale_high_code` = code nhỏ nhất, không phải lớn nhất trong các
+code thật của thang đo) → `factor` mirror để mean phản ánh đúng chiều (factor cao = giá trị cao):
+
+```
+factor(code) = code_max + code_min - code
+```
+
+```json
+{ "question": "A4", "label": "Frequency", "stats": ["base", "percent", "mean"],
+  "choices": [
+    { "code": 1, "factor": 7 },
+    { "code": 2, "factor": 6 },
+    { "code": 3, "factor": 5 },
+    { "code": 4, "factor": 4 },
+    { "code": 5, "factor": 3 },
+    { "code": 6, "factor": 2 },
+    { "code": 7, "factor": 1 }
+  ]
+}
+```
+
+**2. Thang đo 1–5 → thêm T2B/B2B:**
+
+2 code gần đầu "cao nhất" của thang (theo `scale_high_code`) → `t2b_codes`; 2 code gần đầu
+"thấp nhất" → `b2b_codes`.
+
+```json
+{ "question": "C4", "stats": ["base", "percent", "mean", "t2b", "b2b"],
+  "t2b_codes": [4, 5], "b2b_codes": [1, 2] }
+```
+
+Đảo ngược (`scale_high_code: 1`) → đảo luôn: `"t2b_codes": [1, 2], "b2b_codes": [4, 5]`.
+
+**3. Thang đo 1–10 hoặc 0–10 → thêm NPS groups + stat `"nps"`:**
+
+2 code gần đầu "cao nhất" → Promoters; 2 code kế tiếp → Passives; các code còn lại (đầu
+"thấp nhất") → Detractors.
+
+```json
+{ "question": "E9", "stats": ["base", "percent", "mean", "nps"],
+  "choices": [
+    { "type": "promoters",  "codes": [9, 10],              "label": "Promoters" },
+    { "type": "passive",    "codes": [7, 8],                "label": "Passives" },
+    { "type": "detractors", "codes": [0, 1, 2, 3, 4, 5, 6], "label": "Detractors" }
+  ]
+}
+```
+
+(Thang chỉ có 1–10, không có code 0 → Detractors = `[1,2,3,4,5,6]`.) Đảo ngược → Promoters
+luôn là 2 code gần đầu "cao nhất" theo `scale_high_code` (có thể là code nhỏ), Detractors là
+phần code ở đầu "thấp nhất" — không tính theo trị số tuyệt đối.
+
+**Câu Ordinal có thang đo khác 1–5 và 1–10/0–10** → chỉ thêm `"mean"` (mục 1), không tự
+thêm T2B/B2B/NPS.
+
+**Luôn bỏ qua meta code 98/99** (Others/No answer) khỏi mọi phép tính trên — chúng không
+thuộc thang đo.
+
 ### Step 4 — Create datatable.json
 
 **Nếu user đã chỉ định rõ yêu cầu** → tạo `datatable/datatable.json` theo yêu cầu đó.
@@ -717,6 +805,13 @@ Sau khi chạy bảng (Step 5 / Workflow B), table step **tự sinh** `chart_dat
 cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) — chart PowerPoint
 **editable**, mỗi câu 1 slide, style khớp template công ty.
 
+**Chọn table để chạy appendix** — appendix chỉ render **đúng 1 table** trong `datatable.json`
+(không bao giờ gộp tất cả tables lại), theo thứ tự ưu tiên `sub_title`:
+1. Table có `sub_title: "Appendix"` → dùng table này.
+2. Không có → table có `sub_title: "General"` → dùng table này.
+3. Không có cả 2 → **không chạy**, hỏi user tạo table với `sub_title: "Appendix"` trong
+   `datatable.json` (không tự đoán bảng khác).
+
 **Confirm trước khi chạy** (giống chạy pipeline):
 > "Tôi sẽ tạo appendix PPTX từ chart_data.json. Bạn xác nhận không?"
 
@@ -735,7 +830,8 @@ surveyflow-pptx \
   output/SURVEY_NAME/v1/slides.pptx
 ```
 
-Tuỳ chọn `surveyflow-pptx`: `--table N` (chỉ 1 bảng), `--start-page N` (số trang bắt đầu).
+Tuỳ chọn `surveyflow-pptx`: `--table N` (ghi đè bằng table_index cụ thể, bỏ qua auto-select
+theo `sub_title`), `--start-page N` (số trang bắt đầu).
 
 **Chart type tự suy ra** từ `chart_data.json`:
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải
@@ -809,9 +905,11 @@ output/SURVEY_NAME/
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
-| "tạo appendix PPTX / chạy slides" | Workflow D: `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
 | "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA, ghi field `scale_class` |
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó trong metadata.json — chỉ Ordinal mới tự thêm `mean` |
+| "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
+| "thang đo tần suất bị đảo, mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |
 
 ---
 

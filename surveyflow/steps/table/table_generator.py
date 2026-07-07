@@ -1441,6 +1441,48 @@ def compute_table(
                                 if grp.get("type", "combine") == "netted":
                                     for code in grp_codes: sub_rows.append(_mx_pct_row(code))
                             for code in _display_codes: sub_rows.append(_mx_pct_row(code))
+
+                    elif stat == "nps":
+                        # Matrix_SA sub-question NPS (e.g. per-brand 0-10/1-10
+                        # recommend/liking scale) — mirrors the flat-SA "nps"
+                        # branch above; was previously missing entirely for
+                        # Matrix_SA, so "nps" in stats silently produced no
+                        # row for any matrix question (see CLAUDE.md Step 3c).
+                        if is_sub_ma or not col_choices:
+                            continue
+                        _choices_cfg_nps = sc.get("choices", [])
+                        _nps_p_codes: list[str] = []
+                        _nps_d_codes: list[str] = []
+                        for _e in _choices_cfg_nps:
+                            _etype = _e.get("type", "")
+                            if _etype == "promoters":
+                                _nps_p_codes.extend(str(c) for c in _e.get("codes", []))
+                            elif _etype == "detractors":
+                                _nps_d_codes.extend(str(c) for c in _e.get("codes", []))
+                        if not _nps_p_codes and sc.get("nps_promoters"):
+                            _nps_p_codes = [str(c) for c in sc["nps_promoters"]]
+                        if not _nps_d_codes and sc.get("nps_detractors"):
+                            _nps_d_codes = [str(c) for c in sc["nps_detractors"]]
+                        if not _nps_p_codes and not _nps_d_codes:
+                            continue
+                        _nps_batch = [
+                            _code_counts_sc_batch(sub_dfs[i], sub_col, _nps_p_codes + _nps_d_codes)
+                            for i in range(n)
+                        ]
+                        nps_vals: dict[int, float] = {}
+                        for i in range(n):
+                            base = sub_bases[i]
+                            if base == 0:
+                                nps_vals[i] = 0.0
+                                continue
+                            p_cnt = sum(_nps_batch[i].get(c, 0) for c in _nps_p_codes)
+                            d_cnt = sum(_nps_batch[i].get(c, 0) for c in _nps_d_codes)
+                            nps_vals[i] = round((p_cnt / base - d_cnt / base) * 100, 2)
+                        sub_rows.append(StubRow(
+                            label=STAT_LABELS["nps"], row_type="nps",
+                            counts={i: 0 for i in nps_vals}, values=nps_vals,
+                        ))
+
                     elif stat in ("mean", "std", "se", "min", "max"):
                         if is_sub_ma:
                             # Matrix_MA: mean = avg number of columns selected per respondent

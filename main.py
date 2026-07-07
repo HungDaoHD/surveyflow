@@ -48,11 +48,11 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-SURVEY_ID   = 723450   # int  — survey ID từ QMe
-SURVEY_NAME = "VN8964" # str  — tên thư mục output
+# SURVEY_ID   = 723450   # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
-# SURVEY_ID   = 723442               # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
+SURVEY_ID   = 723442               # int  — survey ID từ QMe
+SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
 
 # SURVEY_ID   = 716642                  # int  — survey ID từ QMe
 # SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output

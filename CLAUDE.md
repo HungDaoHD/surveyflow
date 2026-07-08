@@ -207,6 +207,36 @@ một câu SA/Matrix_SA có `scale_class: "Ordinal"` vào `stub` của `datatabl
 > 1 choice, toàn bộ `mean` của câu đó sẽ trả về **0.0** một cách âm thầm (không lỗi). Vì vậy
 > **luôn** thêm `factor` cho mọi code thật của thang đo (bỏ qua meta code 98/99), kể cả khi
 > thang đo không đảo ngược.
+>
+> **Chỉ duy nhất 1 format được hỗ trợ:** per-choice `"choices": [{"code": .., "factor": ..}]`
+> như ví dụ dưới đây. Pipeline **không** nhận bất kỳ field nào khác cho mục đích này — không
+> có top-level `"factors"` (dict), không có `"mean_factor"` (dict), không có `"factor"` số ít
+> ở top-level. Đây là bug thực tế đã xảy ra 2 lần (dùng nhầm `"factor"` số ít, và trước đó
+> pipeline từng có 2 field fallback này nhưng đã bị bỏ hẳn) — đều dẫn tới `mean` âm thầm = 0.0.
+>
+> **Matrix_SA — lấy code từ `choices_i18n.columns`, KHÔNG BAO GIỜ từ `.rows`.** `.rows` là
+> danh sách item được đánh giá (VD brand) — không phải thang đo, và không dùng để tính
+> `factor`/`scale_class`/`t2b_codes`/NPS groups. Đây cũng là bug thực tế đã xảy ra (nhầm lấy
+> code từ `.rows` khiến factor/scale hoàn toàn sai vì số lượng item ≠ số điểm thang đo).
+
+> ⚠️ **NGOẠI LỆ — câu tần suất (frequency scale): KHÔNG tự động thêm mean/factor.** Thang tần
+> suất (VD "Hàng ngày / Vài lần tuần / Hiếm khi / Không bao giờ", "Never→Always") thường
+> không có 1 công thức factor "đúng" hiển nhiên — khoảng cách giữa các mức không đều nhau về
+> mặt thời gian thực tế, hoặc có mức bất thường phá vỡ thứ tự thuần tuý (VD "Bị trả chậm" xen
+> giữa thang tần suất — xem ví dụ ở Step 3b). Gán `factor` tự động (identity/mirror) cho loại
+> câu này có thể ra mean sai lệch về mặt ý nghĩa dù công thức tính đúng cú pháp. Khi Step 3b
+> phân loại 1 câu SA/Matrix_SA là Ordinal **và nội dung là thang tần suất**:
+> 1. **Không** áp dụng mục 1-3 dưới đây tự động như các câu Ordinal khác.
+> 2. Hỏi user: *"Câu {label} là thang đo tần suất. Bạn muốn tự nhập factor cho từng mức (VD:
+>    Hàng ngày=5, Vài lần/tuần=4, Hiếm khi=2, Không bao giờ=1) hay để pipeline coi câu này là
+>    Nominal (không tính mean)?"*
+> 3. User cung cấp factor → dùng đúng giá trị user đưa (per-choice, cùng format `choices` như
+>    trên), giữ `scale_class: "Ordinal"` trong `metadata.json`, tiếp tục áp dụng T2B/B2B/NPS
+>    bình thường theo range (mục 2-3 dưới đây).
+> 4. User chọn bỏ qua ("ignore"/"không cần") → sửa `scale_class` trong `metadata.json` từ
+>    `"Ordinal"` thành `"Nominal"` cho câu đó — SA sửa entry đó; Matrix_SA sửa **cả entry cha
+>    lẫn từng `sub_questions`** (giống quy tắc ghi ở Step 3b). Stub chỉ giữ
+>    `["base", "percent"]`, không thêm `mean`/`factor`/T2B/B2B/NPS.
 
 Thang đo **không** đảo ngược (`scale_high_code` bỏ trống hoặc = code lớn nhất) → `factor`
 = chính code đó (identity mapping):
@@ -224,14 +254,16 @@ Thang đo **không** đảo ngược (`scale_high_code` bỏ trống hoặc = co
 ```
 
 Thang đo **bị đảo ngược** (`scale_high_code` = code nhỏ nhất, không phải lớn nhất trong các
-code thật của thang đo) → `factor` mirror để mean phản ánh đúng chiều (factor cao = giá trị cao):
+code thật của thang đo) → `factor` mirror để mean phản ánh đúng chiều (factor cao = giá trị cao).
+(Ví dụ dưới đây là thang đồng ý 7 điểm bị đảo — **không** phải câu tần suất, xem ngoại lệ ở trên
+cho câu tần suất):
 
 ```
 factor(code) = code_max + code_min - code
 ```
 
 ```json
-{ "question": "A4", "label": "Frequency", "stats": ["base", "percent", "mean"],
+{ "question": "A4", "label": "Agreement (reversed)", "stats": ["base", "percent", "mean"],
   "choices": [
     { "code": 1, "factor": 7 },
     { "code": 2, "factor": 6 },
@@ -978,7 +1010,10 @@ output/SURVEY_NAME/
 | "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class` |
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó trong metadata.json — chỉ Ordinal mới tự thêm `mean` |
 | "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
-| "thang đo tần suất bị đảo, mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |
+| "thang đo bị đảo (không phải tần suất), mean tính sai" | Step 3c: kiểm tra `scale_high_code` trong metadata.json, thêm `factor` cho từng choice theo công thức mirror |
+| "câu tần suất sao không tự có mean" | Đúng — Step 3c cố ý KHÔNG tự thêm mean/factor cho câu tần suất, phải hỏi user trước (xem ngoại lệ trong Step 3c) |
+| "tự nhập factor cho câu tần suất" | Ghi đúng giá trị user đưa vào `choices` (per-choice), giữ `scale_class: "Ordinal"`, áp T2B/B2B/NPS theo range như bình thường |
+| "bỏ qua/ignore mean cho câu tần suất" | Sửa `scale_class` câu đó thành `"Nominal"` trong metadata.json (Matrix_SA: cả entry cha + `sub_questions`), stub giữ `["base","percent"]` |
 | "thêm câu ranking vào stub / gộp slide ranking lại" | Tách thành 2 stub entries: Top 3 (`ranking_mode: "rank_dist", ranking_top_n: 3`) + Overall (`ranking_mode: "any_rank"`) — xem mục "ranking — mặc định Top 3 + Overall" |
 | "thêm câu NUM vào stub" | Tự động thêm `"mean"` vào `stats` + `"num_quantile": 4` — không cần hỏi/xác nhận trước |
 | "chia N nhóm thay vì 4" | Sửa giá trị `num_quantile` trong stub entry của câu NUM đó |

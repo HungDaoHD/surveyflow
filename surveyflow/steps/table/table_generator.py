@@ -49,9 +49,12 @@ def _is_unified_choices(choices_cfg: list[dict]) -> bool:
 def _extract_factors_from_choices(choices_cfg: list[dict]) -> dict[str, float]:
     """Build a factor map {code_str: factor} from per-choice ``"factor"`` fields.
 
-    Returns an empty dict when no choices carry a ``"factor"`` key (caller
-    should fall back to the legacy top-level ``"factors"`` / ``"mean_factor"``
-    dict).
+    This is the ONLY supported way to configure a mean factor -- the legacy
+    top-level ``"factors"`` / ``"mean_factor"`` dict fallbacks were removed
+    (they were a common source of silent mean=0.0 bugs: it was too easy to
+    write a plausible-looking but unrecognized key, e.g. a bare singular
+    ``"factor"``, and get no error at all). Returns an empty dict when no
+    choices carry a ``"factor"`` key.
     """
     return {
         str(e["code"]): float(e["factor"])
@@ -1554,14 +1557,12 @@ def compute_table(
                             # Matrix_SA: mean of SA rating values per sub-question column
                             if not sub_col or sub_col not in df.columns:
                                 continue
-                            _cf_mx = _extract_factors_from_choices(sc.get("choices", []))
-                            _mf = _cf_mx or sc.get("factors") or sc.get("mean_factor")
+                            _mf = _extract_factors_from_choices(sc.get("choices", []))
                             if not _mf:
                                 logger.warning(
                                     "%s%s_r%s: stat 'mean' requested but no factor could be "
                                     "resolved -- expected per-choice {\"code\":.., \"factor\":..} "
-                                    "entries in \"choices\", or a top-level \"factors\"/\"mean_factor\" "
-                                    "dict (a bare top-level \"factor\" key is NOT recognized). "
+                                    "entries in \"choices\" (the only supported format). "
                                     "Mean will silently be 0.0 for this row.",
                                     _pfx, q.upper(), sub_meta.get("row_index", row_label),
                                 )
@@ -2113,18 +2114,18 @@ def compute_table(
                 else:
                     if atype == "SA" and not choices_i18n:
                         continue
-                    # factors / mean_factor: maps code → numeric weight (SA only).
-                    # Priority: per-choice "factor" fields → "factors" dict → "mean_factor" dict.
+                    # factor: maps code → numeric weight (SA only). Only supported
+                    # format is per-choice {"code":.., "factor":..} entries inside
+                    # "choices" -- no other key/shape is recognized (see
+                    # _extract_factors_from_choices).
                     mean_factor: dict | None = None
                     if atype == "SA":
-                        _cf = _extract_factors_from_choices(sc.get("choices", []))
-                        mean_factor = _cf or sc.get("factors") or sc.get("mean_factor")
+                        mean_factor = _extract_factors_from_choices(sc.get("choices", []))
                         if not mean_factor:
                             logger.warning(
                                 "%s%s: stat '%s' requested but no factor could be resolved -- "
                                 "expected per-choice {\"code\":.., \"factor\":..} entries in "
-                                "\"choices\", or a top-level \"factors\"/\"mean_factor\" dict "
-                                "(a bare top-level \"factor\" key is NOT recognized). "
+                                "\"choices\" (the only supported format). "
                                 "%s will silently be 0.0 for this question.",
                                 _pfx, q.upper(), stat, STAT_LABELS[stat],
                             )

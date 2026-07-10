@@ -48,8 +48,8 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-# SURVEY_ID   = 723450   # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8964" # str  — tên thư mục output
+SURVEY_ID   = 723450   # int  — survey ID từ QMe
+SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
 # SURVEY_ID   = 723442               # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
@@ -57,8 +57,8 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 716642                  # int  — survey ID từ QMe
 # SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output
 
-SURVEY_ID   = 723512               # int  — survey ID từ QMe
-SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
+# SURVEY_ID   = 723512               # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
 
 
 
@@ -69,6 +69,11 @@ RUN_INGEST   = False  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = False  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
 GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
+
+# Format appendix: "general" (mặc định) | "dzung_team" (style công ty Dzung_team)
+# None = tự đọc field "appendix_format" của table trong datatable.json (mặc định "general"
+# nếu table không có field này); đặt cứng ở đây sẽ GHI ĐÈ field đó cho lần chạy này.
+APPENDIX_FORMAT = "dzung_team"   # hoặc "general" / "dzung_team"
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
 LANG = "en"           # "vi" = Tiếng Việt | "en" = English
@@ -158,6 +163,7 @@ def main():
     print(f"  Mode    : fetch={FETCH_MODE}")
     print(f"  Steps   : fetch={FETCH_MCP}  ingest={RUN_INGEST}  quality={RUN_QUALITY}  table={RUN_TABLE}")
     print(f"  Lang    : {LANG}")
+    print(f"  Appendix: pptx={GENERATE_PPTX}  format={APPENDIX_FORMAT or 'auto (per datatable.json)'}")
     print("=" * 60)
 
     # ── Step 1: Fetch ──────────────────────────────────────────────────────────
@@ -212,9 +218,9 @@ def main():
         chart_data_path = output_dir / version / "chart_data.json"
         slides_path     = output_dir / version / "slides.pptx"
         if chart_data_path.exists():
-            print(f"\n[pptx] Generating slides -> {slides_path}")
+            print(f"\n[pptx] Generating slides -> {slides_path}  (format={APPENDIX_FORMAT or 'auto'})")
             from surveyflow.steps.appendix.generate_pptx import generate as gen_pptx
-            gen_pptx(str(chart_data_path), str(slides_path))
+            gen_pptx(str(chart_data_path), str(slides_path), style=APPENDIX_FORMAT)
         else:
             print(f"\n[pptx] chart_data.json not found at {chart_data_path} -- skipping")
 

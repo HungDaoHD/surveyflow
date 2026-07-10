@@ -653,6 +653,8 @@ class TableStep(Step):
                 "banner_cols": [bc.to_dict() for bc in item["banner_cols"]],
                 "blocks":      [b.to_dict()  for b  in item["blocks"]],
                 "tables":      item["cfg"].get("tables", []),
+                "appendix_format": item["cfg"].get("appendix_format", "general"),
+                "stub":        item["cfg"].get("stub", []),
             }
             for item in computed
         ]
@@ -743,6 +745,7 @@ class TableStep(Step):
             survey_name   = survey_name,
             version       = version,
             metadata      = context.get("metadata"),
+            lang          = context.get("lang", "vi"),
         )
         logger.info("chart_data.json → %s", chart_data_path)
         context["chart_data_path"] = chart_data_path

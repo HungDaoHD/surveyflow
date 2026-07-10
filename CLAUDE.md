@@ -771,6 +771,8 @@ Dùng trong table item có `matrix_orientation: "horizontal"`.
 ### Stub rules
 - One entry per question
 - `stats` options: `"base"`, `"percent"`, `"t2b"`, `"b2b"`, `"mean"`, `"std"`, `"se"`
+- `"title"` (optional, mặc định `null`) — tiêu đề ngắn gọn hiển thị trên đầu slide appendix
+  (General lẫn Dzung_team), thay cho label gốc dài; xem "Tiêu đề slide tuỳ chỉnh" trong Workflow D
 - Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
   - Matrix questions automatically expand into one block per row (sub-question)
   - When `banner_matrix` is active, matrix questions use paired mode instead
@@ -908,8 +910,81 @@ cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) 
 3. Không có cả 2 → **không chạy**, hỏi user tạo table với `sub_title: "Appendix"` trong
    `datatable.json` (không tự đoán bảng khác).
 
+### Chọn format — General hay Dzung_team
+
+Trước khi tạo appendix **lần đầu** cho 1 table (table đó chưa có field `appendix_format`
+trong `datatable.json`), hỏi user:
+> "Bạn muốn appendix dùng format nào?
+> 1. General — style chart mặc định của surveyflow
+> 2. Dzung_team — style theo template công ty Dzung_team (donut/bar theo màu + slide layout riêng)"
+
+Ghi lựa chọn vào **field `appendix_format`** ngay trong table item đó của `datatable.json`
+(mặc định là `"general"` nếu bỏ qua field này — không cần ghi tường minh cho format General):
+
+```json
+{
+  "type": "datatable",
+  "sub_title": "Appendix",
+  "appendix_format": "dzung_team",
+  "banner": [...],
+  "stub": [...],
+  "tables": [...]
+}
+```
+
+Field này **tự động chảy qua** `chart_data.json` (table step ghi lại nguyên văn) rồi tới
+`generate()`/`surveyflow-pptx` — nghĩa là chỉ cần hỏi **một lần**; các lần chạy appendix sau
+(`--appendix` hoặc `surveyflow-pptx` riêng) tự dùng lại format đã lưu, không hỏi lại, trừ khi
+user yêu cầu đổi format. Muốn đổi format cho 1 lần chạy mà không sửa `datatable.json` → dùng
+`surveyflow-pptx ... --format general|dzung_team` (ghi đè, không lưu lại).
+
+**Dzung_team format khác General ở đâu:**
+- Dùng slide layout công ty ("use_dz") thay vì slide trắng — background/thanh màu tự có sẵn từ
+  template, không cần vẽ thủ công.
+- Title/footer/số trang là **placeholder thật** của template (không phải textbox tự vẽ).
+- Font Segoe UI (thay Arial), bảng màu chart riêng (5 màu: `156082/0F9ED5/A6A6A6/843C0C/4EA72E`).
+- Chỉ có 2 layout: donut+stack (SA Ordinal/thang đo) và 3-cột bar ngang (dùng chung cho MA
+  **và** SA-Nominal nhiều lựa chọn — template Dzung_team chưa có style cột dọc riêng).
+- Ô tag góc trên-trái tự đổi theo `--lang` của lần chạy table gần nhất (`lang` được ghi kèm vào
+  `chart_data.json`): `"PHỤ LỤC"` nếu `--lang vi`, `"APPENDIX"` nếu `--lang en`. Không cần cấu hình
+  gì thêm — chỉ cần chạy table đúng `--lang` mong muốn trước khi tạo appendix. Muốn ghi đè text
+  khác (VD số chương khác "08") → `surveyflow-pptx ... --dz-section-label "08 | PHỤ LỤC"`.
+- Asset nằm ở `surveyflow/steps/appendix/appendix_templates/dzung_team_template.pptx` +
+  `surveyflow/steps/appendix/chart_templates_dzung_team/{bar,donut,stacked}.xml`. Muốn đổi màu/font
+  Dzung_team → sửa file gốc (chưa strip slide) trong PowerPoint → chạy lại
+  `tools/extract_chart_templates_dzung_team.py path/to/your_unstripped_source.pptx` (xem docstring
+  trong file đó — bản bundle trong repo đã bị xoá hết slide mẫu, không dùng lại được để extract).
+
+### Tiêu đề slide tuỳ chỉnh — field "title" trong stub
+
+Mỗi stub entry trong `datatable.json` có thể có thêm field **`"title"`** (mặc định không có /
+`null`) — tiêu đề ngắn gọn hiển thị to trên đầu slide, thay cho label gốc (thường dài, đúng
+nguyên văn câu hỏi khảo sát). Field footer/Q-label ở cuối slide **luôn** vẫn hiện label gốc đầy
+đủ (không đổi) — `title` chỉ thay tiêu đề lớn.
+
+```json
+{ "question": "F7", "label": "What could make you CONSIDER TRYING economy instant noodles? (Multiple)",
+  "title": "Reasons to try economy noodles", "stats": ["base", "percent"] }
+```
+
+**Khi Claude thêm 1 câu vào stub** (Step 4 hoặc Workflow B) và label câu đó **dài/khó đọc làm
+tiêu đề slide** (câu hỏi đầy đủ, nhiều mệnh đề phụ, ghi chú kỹ thuật kiểu "(Multiple)", "SHOW
+ANSWER OF..."), Claude tự đề xuất 1 bản tóm tắt ngắn gọn (5-10 từ, giữ đúng ý câu hỏi, bỏ phần
+kỹ thuật/lặp) và hỏi user xác nhận trước khi ghi vào `title`:
+> "Label câu F7 khá dài để làm tiêu đề slide. Đề xuất title: 'Reasons to try economy noodles'.
+> Bạn dùng đề xuất này, tự nhập title khác, hay giữ nguyên label làm tiêu đề?"
+
+Không tự động ghi `title` mà không hỏi — khác với các auto-rule khác (mean/factor/T2B...), tóm
+tắt ngôn ngữ tự nhiên là chủ quan nên luôn cần user xác nhận. Label ngắn/rõ ràng sẵn (đã ≤ ~8 từ)
+thì không cần đề xuất `title`, để `null` là đủ.
+
+**Câu matrix/ranking** — 1 field `title` trên stub entry cha (VD `"question": "Q17"`) áp dụng cho
+**toàn bộ** slide row/rank sinh ra từ câu đó (VD `Q17_R1`, `Q17_R2`, ..., `Q27_2-Rank 1`); không
+set title riêng theo từng row/rank được. **row_group** (`items: [...]`) → set `title` trên từng
+item riêng nếu cần khác nhau theo từng câu con.
+
 **Confirm trước khi chạy** (giống chạy pipeline):
-> "Tôi sẽ tạo appendix PPTX từ chart_data.json. Bạn xác nhận không?"
+> "Tôi sẽ tạo appendix PPTX (format {General/Dzung_team}) từ chart_data.json. Bạn xác nhận không?"
 
 **Cách 1 — chạy kèm pipeline** (table + appendix trong 1 lệnh):
 ```bash
@@ -927,7 +1002,8 @@ surveyflow-pptx \
 ```
 
 Tuỳ chọn `surveyflow-pptx`: `--table N` (ghi đè bằng table_index cụ thể, bỏ qua auto-select
-theo `sub_title`), `--start-page N` (số trang bắt đầu).
+theo `sub_title`), `--start-page N` (số trang bắt đầu), `--format general|dzung_team` (ghi đè
+`appendix_format` của table cho riêng lần chạy này, không lưu lại vào `datatable.json`).
 
 **Chart type tự suy ra** từ `chart_data.json`:
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải
@@ -1006,7 +1082,11 @@ output/SURVEY_NAME/
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
-| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; nếu table chưa có `appendix_format` thì hỏi General/Dzung_team trước; `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "appendix theo format Dzung_team / style công ty Dzung_team" | Ghi `"appendix_format": "dzung_team"` vào table item trong `datatable.json` (xem "Chọn format — General hay Dzung_team") rồi chạy appendix bình thường — lưu 1 lần, các lần sau tự dùng lại |
+| "đổi appendix về format general / bỏ Dzung_team" | Xoá field `appendix_format` (hoặc set `"general"`) khỏi table item đó trong `datatable.json` |
+| "label câu này dài quá, rút gọn tiêu đề slide" | Đề xuất bản tóm tắt ngắn (5-10 từ) → user xác nhận → ghi vào `"title"` của stub entry đó |
+| "bỏ title tuỳ chỉnh, dùng lại label gốc" | Xoá field `"title"` (hoặc set `null`) khỏi stub entry đó |
 | "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class` |
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó trong metadata.json — chỉ Ordinal mới tự thêm `mean` |
 | "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code của thang đo — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |

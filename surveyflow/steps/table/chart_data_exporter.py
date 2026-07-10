@@ -6,6 +6,7 @@ chart-ready structure consumed by generate_pptx.py and other visualisation tools
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -246,6 +247,51 @@ def _process_stub(block: dict, total_idx: int | None, breakdown_groups: dict,
     }
 
 
+# ── Slide title override ──────────────────────────────────────────────────────
+#
+# `datatable.json` stub entries may carry an optional user-authored "title" —
+# a short summary to show as the slide's headline instead of the (often long,
+# verbatim survey-wording) question label. It's authored on the stub config
+# (the file Claude/the user actually edits), not on chart_data.json directly,
+# then flattened here into a question-code → title map and attached to each
+# exported question by matching codes — see _lookup_title for how a title set
+# once on a matrix/ranking parent question covers every row/rank slide it
+# expands into.
+
+def _flatten_stub_titles(stub_configs: list[dict]) -> dict[str, str]:
+    """question-code (upper) -> title, from every stub entry's own "title"
+    plus one level of row_group "items" (each item is itself a stub-like
+    config with its own "question"/"title")."""
+    out: dict[str, str] = {}
+    for sc in stub_configs:
+        title = sc.get("title")
+        q = str(sc.get("question", "")).strip().upper()
+        if title and q:
+            out[q] = title
+        for item in sc.get("items", []) or []:
+            i_title = item.get("title")
+            i_q = str(item.get("question", "")).strip().upper()
+            if i_title and i_q:
+                out[i_q] = i_title
+    return out
+
+
+_ROW_SUFFIX_RE  = re.compile(r"_R\d+$")
+_RANK_SUFFIX_RE = re.compile(r"-(RANK\s*\d+|OVERALL)$")
+
+
+def _lookup_title(title_by_qcode: dict[str, str], question_code: str) -> str | None:
+    """Exact match first; else strip a trailing matrix-row suffix ("_R10") or
+    ranking sub-block suffix ("-Rank 1"/"-Overall") and retry against the
+    parent question's own code — so a title set once on a matrix/ranking stub
+    entry applies to every row/rank slide it expands into, not just one."""
+    q = str(question_code or "").strip().upper()
+    if q in title_by_qcode:
+        return title_by_qcode[q]
+    base = _RANK_SUFFIX_RE.sub("", _ROW_SUFFIX_RE.sub("", q))
+    return title_by_qcode.get(base)
+
+
 # ── Main export function ──────────────────────────────────────────────────────
 
 def export_chart_data(
@@ -254,6 +300,7 @@ def export_chart_data(
     survey_name: str = "",
     version: str = "",
     metadata: dict | None = None,
+    lang: str = "vi",
 ) -> str:
     """Transform table_results → chart_data.json, write to output_dir.
 
@@ -265,6 +312,10 @@ def export_chart_data(
         metadata:       context["metadata"] — used to look up each SA question's
                          Claude-classified `scale_class` ("Ordinal"/"Nominal",
                          see CLAUDE.md Step 3b) by question label.
+        lang:           Display language used for this run's labels (e.g. "vi"/
+                         "en") — embedded in the JSON so generate_pptx.py can
+                         pick a language-appropriate Dzung_team section tag
+                         ("PHỤ LỤC" vs "APPENDIX") without a separate CLI flag.
 
     Returns:
         Absolute path of the written file.
@@ -304,13 +355,21 @@ def export_chart_data(
                 bc_entry = {**bc, "_idx": i}
                 breakdown_groups.setdefault(g, []).append(bc_entry)
 
+        title_by_qcode = _flatten_stub_titles(tr.get("stub", []))
+
         questions_out: list[dict] = []
+
+        def _append(q: dict | None) -> None:
+            if not q:
+                return
+            q["title"] = _lookup_title(title_by_qcode, q.get("question", ""))
+            questions_out.append(q)
+
         for block in blocks:
             btype = block.get("type", "stub")
             if btype == "stub":
                 q = _process_stub(block, total_idx, breakdown_groups, scale_by_label)
-                if q:
-                    questions_out.append(q)
+                _append(q)
             elif btype == "ranking":
                 # Sub-blocks are per-rank-position ("Rank 1", "Rank 2", …) or a
                 # single flat "any rank" block — neither carries the actual
@@ -338,24 +397,24 @@ def export_chart_data(
                         # not the donut used for the per-rank-position blocks.
                         sub["answer_type"] = "MA"
                     q = _process_stub(sub, total_idx, breakdown_groups, scale_by_label)
-                    if q:
-                        questions_out.append(q)
+                    _append(q)
             elif btype == "row_group":
                 for sub in block.get("sub_blocks", []):
                     q = _process_stub(sub, total_idx, breakdown_groups, scale_by_label)
-                    if q:
-                        questions_out.append(q)
+                    _append(q)
 
         tables_out.append({
-            "table_index": tr.get("table_index", 0),
-            "title":       tr.get("title", ""),
-            "sub_title":   tr.get("sub_title", ""),
-            "questions":   questions_out,
+            "table_index":     tr.get("table_index", 0),
+            "title":           tr.get("title", ""),
+            "sub_title":       tr.get("sub_title", ""),
+            "appendix_format": tr.get("appendix_format", "general"),
+            "questions":       questions_out,
         })
 
     result = {
         "survey":  survey_name,
         "version": version,
+        "lang":    lang,
         "tables":  tables_out,
     }
 

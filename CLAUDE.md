@@ -1046,14 +1046,14 @@ Returns: `{ job_id, status, expires_at, files[], ... }`
 
 ### get_survey_data_file_status
 ```
-Required: job_id (string)
+Required: job_id (integer)
 ```
 Returns: `{ status ("pending"|"processing"|"ready"|"error"), retry_after_seconds, ... }`  
 Poll mỗi `retry_after_seconds` cho đến khi `status == "ready"`.
 
 ### read_survey_data_file
 ```
-Required: job_id  (string)
+Required: job_id  (integer)
 Optional: file    (string "data" | "definition", default "data")
           offset  (integer, default 0)
           limit   (integer, default 500)

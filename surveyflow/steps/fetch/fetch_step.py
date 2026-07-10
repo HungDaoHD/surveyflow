@@ -239,7 +239,7 @@ class FetchStep(Step):
     # ── chunk reader (shared) ─────────────────────────────────────────────────
 
     @staticmethod
-    def _read_all_chunks(client: Any, job_id: str,
+    def _read_all_chunks(client: Any, job_id: int,
                          file_type: str, limit: int) -> str:
         """Read all chunks for *file_type*, return assembled CSV string.
 

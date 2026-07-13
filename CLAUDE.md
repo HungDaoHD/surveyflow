@@ -163,10 +163,12 @@ với `scale_class` — chỉ cần chạy **một lần** sau ingestion, không
 terminal, không có AI) → `title_i18n` giữ nguyên `null` cho mọi câu, vì bước tóm tắt chỉ Claude
 mới làm được — đây là hành vi đúng theo thiết kế, không phải lỗi.
 
-> Field này hiện **chỉ dừng ở `metadata.json`** — chưa có bước nào ở Table/Appendix đọc
-> `title_i18n` (khác với field `"title"` ở cấp stub trong `datatable.json`, vốn đã được dùng để
-> đặt tiêu đề slide appendix — xem Workflow D). Việc nối `title_i18n` vào các bước sau sẽ được
-> hướng dẫn ở lệnh tiếp theo.
+> `title_i18n` **đã nối vào `chart_data.json`**: table step ghi field `"title"` (ngay sau
+> `"question"`) cho mỗi câu — lấy `"title"` của stub trong `datatable.json` nếu có, không thì tự
+> fallback sang `title_i18n[lang]` của câu đó trong `metadata.json` (giống hệt cách `"label"`
+> fallback sang `question_i18n`). Nhờ vậy chỉ cần làm Step 3a **một lần** sau ingestion là mọi
+> slide appendix sau này tự có tiêu đề tóm tắt — xem "Tiêu đề slide tuỳ chỉnh" trong Workflow D
+> để biết khi nào cần ghi đè thủ công field `"title"` cấp stub.
 
 ### Step 3b — Classify SA AND Matrix_SA questions (Ordinal vs Nominal)
 
@@ -1021,7 +1023,9 @@ user yêu cầu đổi format. Muốn đổi format cho 1 lần chạy mà khôn
 - Dùng slide layout công ty ("use_dz") thay vì slide trắng — background/thanh màu tự có sẵn từ
   template, không cần vẽ thủ công.
 - Title/footer/số trang là **placeholder thật** của template (không phải textbox tự vẽ).
-- Font Segoe UI (thay Arial), bảng màu chart riêng (5 màu: `156082/0F9ED5/A6A6A6/843C0C/4EA72E`).
+- Font Segoe UI (thay Arial), bảng màu chart riêng — 5 màu thật của brand
+  (`156082/0F9ED5/A6A6A6/843C0C/4EA72E`) + 15 sắc tint/shade suy ra từ 5 màu đó, tổng 20 màu
+  (tránh trùng màu khi câu có >5 lựa chọn — bug thực tế đã xảy ra, VD câu 8 lựa chọn).
 - Chỉ có 2 layout: donut+stack (SA Ordinal/thang đo) và 3-cột bar ngang (dùng chung cho MA
   **và** SA-Nominal nhiều lựa chọn — template Dzung_team chưa có style cột dọc riêng).
 - Ô tag góc trên-trái tự đổi theo `--lang` của lần chạy table gần nhất (`lang` được ghi kèm vào
@@ -1040,6 +1044,12 @@ Mỗi stub entry trong `datatable.json` có thể có thêm field **`"title"`** 
 `null`) — tiêu đề ngắn gọn hiển thị to trên đầu slide, thay cho label gốc (thường dài, đúng
 nguyên văn câu hỏi khảo sát). Field footer/Q-label ở cuối slide **luôn** vẫn hiện label gốc đầy
 đủ (không đổi) — `title` chỉ thay tiêu đề lớn.
+
+**Thứ tự fallback** khi table step tạo `chart_data.json`: `"title"` của stub (nếu set) →
+`title_i18n[lang]` của câu đó trong `metadata.json` (đã điền tự động ở Step 3a, không cần làm gì
+thêm) → label gốc rút gọn (nếu cả 2 đều `null`). Vì vậy trong đa số trường hợp **không cần** ghi
+`"title"` thủ công — chỉ cần khi muốn 1 tiêu đề KHÁC với `title_i18n` đã có (VD Step 3a tóm tắt
+chưa ưng ý, hoặc muốn nhấn mạnh khía cạnh khác của câu hỏi).
 
 ```json
 { "question": "F7", "label": "What could make you CONSIDER TRYING economy instant noodles? (Multiple)",

@@ -615,8 +615,8 @@ R003,    0,     0,     0,     0,      1,      0,      0,       1
       }
     ],
     "stub": [
-      { "question": "Q10", "label": "Gender",    "title": null, "stats": ["base", "percent"] },
-      { "question": "Q36", "label": "Food Freq", "title": null, "stats": ["base", "percent", "mean"],
+      { "question": "Q10", "label": null, "title": null, "stats": ["base", "percent"] },
+      { "question": "Q36", "label": null, "title": null, "stats": ["base", "percent", "mean"],
         "choices": [
           { "code": 1, "factor": 1 }, { "code": 2, "factor": 2 }, { "code": 3, "factor": 3 },
           { "code": 4, "factor": 4 }, { "code": 5, "factor": 5 },
@@ -849,6 +849,12 @@ Dùng trong table item có `matrix_orientation: "horizontal"`.
 
 ### Stub rules
 - One entry per question
+- **`"label"` — LUÔN để `null` khi Claude tự thêm 1 câu vào stub, KHÔNG tự ý viết/rút gọn nội dung
+  vào field này** (kể cả khi label gốc dài) — khác hẳn `"title"` (xem bên dưới), vốn được PHÉP tự
+  đề xuất bản tóm tắt. `"label": null` fallback sang `question_i18n` đầy đủ trong `metadata.json`
+  — dùng làm header hàng bảng xlsx **và** footer/Q-label cuối slide appendix, cần giữ nguyên văn
+  để tra soát với câu hỏi khảo sát gốc. Chỉ ghi `"label"` khi **user tự tay** cung cấp giá trị cụ
+  thể (VD user nói "đặt label câu S3 là 'Gender'").
 - `stats` options: `"base"`, `"percent"`, `"mean"`, `"std"`, `"se"`, `"nps"` — **không còn `"t2b"`/`"b2b"`**;
   T2B/B2B giờ là group entry trong `choices` (`"type": "combine"`), tự render cùng `"percent"`, xem
   Step 3c mục 2

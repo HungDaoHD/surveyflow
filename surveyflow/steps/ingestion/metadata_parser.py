@@ -426,6 +426,11 @@ def parse_metadata(definition: dict) -> dict:
           "question_id":  795699,
           "label":        "S1_1",           ← short question label from MCP
           "question_i18n": {"vi": "...", "en": "...", "ja": "..."},
+          "title_i18n":   null,              ← AI-summarized title; null until Claude fills it
+                                                in post-ingestion (see CLAUDE.md Step 3a) — this
+                                                function never generates real text for it, only
+                                                the null placeholder (deterministic code has no
+                                                summarization capability of its own).
           "answer_type":  "SA",
           "mandatory":    true,
           "status":       1,
@@ -488,6 +493,7 @@ def parse_metadata(definition: dict) -> dict:
                     "answer_type":  sub_atype,
                     "label":        sub_col_name,   # = rawdata column name (e.g. Q9_1_r1)
                     "row_label":    row_label,       # choice text (e.g. "Wakodo")
+                    "title_i18n":   None,            # AI-summarized title (vi/en); see CLAUDE.md
                     "choices_i18n": cols_i18n,
                 }
                 if matrix_other_codes:
@@ -525,6 +531,7 @@ def parse_metadata(definition: dict) -> dict:
             "question_id":  qid,
             "label":        q.get("label", ""),
             "question_i18n": q.get("question_i18n", {}),
+            "title_i18n":   None,   # AI-summarized title (vi/en), filled by Claude post-ingestion; see CLAUDE.md
             "answer_type":  atype,
             "mandatory":    q.get("mandatory", False),
             "status":       q.get("status", 1),

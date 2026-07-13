@@ -300,15 +300,27 @@ DONUT_PALETTE = [
     "938953",  # brown/tan
 ]
 
-# Dzung_team palette — the 5 colors actually observed in the bundled
-# dzung_team_template.pptx's own charts (donut dPt fills + breakdown-bar series
-# fills). Used for BOTH donut and multi-series roles, unlike the general
-# format's separately-curated 12/6-color lists, since only 5 are confirmed —
-# cycles via `palette[i % len(palette)]` like CHART_PALETTE/DONUT_PALETTE, so
-# a >5-choice donut will repeat colors. Extend this list (and re-run
-# tools/extract_chart_templates_dzung_team.py against an updated template) if a
-# real example with more distinct colors becomes available.
-DZ_PALETTE = ["156082", "0F9ED5", "A6A6A6", "843C0C", "4EA72E"]
+# Dzung_team palette — the first 5 colors are the ones actually observed in
+# the bundled dzung_team_template.pptx's own charts (donut dPt fills +
+# breakdown-bar series fills); the other 15 are tints/shades of those same 5
+# (same brand hues at different lightness — not independently sourced),
+# added because a >5-choice donut (e.g. an 8-option MaxDiff-version
+# question) was repeating colors once the palette wrapped via
+# `palette[i % len(palette)]` (real bug — same slice color reused for a
+# different, unrelated choice). Order keeps each tier's 5 brand-color-derived
+# entries together and earlier tiers first, so any <=N-choice question's
+# colors are byte-identical to before a given extension (only questions with
+# MORE choices than the previous palette size are affected by each tier).
+# Used for BOTH donut and multi-series roles, unlike the general format's
+# separately-curated 12/6-color lists. Re-derive (or replace wholesale) with
+# `tools/extract_chart_templates_dzung_team.py` against an updated template
+# if real examples with more distinct brand colors become available.
+DZ_PALETTE = [
+    "156082", "0F9ED5", "A6A6A6", "843C0C", "4EA72E",  # brand colors
+    "7EA7BA", "7BC9E7", "CECECE", "BB9379", "9DCE8C",  # +45% white tints
+    "0F4861", "0B769F", "7C7C7C", "632D09", "3A7D22",  # -25% black shades
+    "B8CFD9", "B7E1F2", "E4E4E4", "DAC4B6", "C9E4C0",  # +70% white tints
+]
 
 GENERAL_THEME = _Theme(
     font_name=None,  # None → helpers keep their own "Arial" default

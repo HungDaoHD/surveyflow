@@ -126,6 +126,48 @@ This produces:
 > definitions needed to build a correct `datatable.json`. Ask datatable questions AFTER
 > ingestion so you can reference real choice codes from metadata.
 
+### Step 3a — Tóm tắt tiêu đề câu hỏi (title_i18n)
+
+Ngay sau khi có `metadata.json` (Step 3), mỗi entry câu hỏi (và mỗi entry trong `sub_questions`
+của câu matrix) đã có sẵn field **`title_i18n`** do `parse_metadata()` (code, không phải AI) tự
+ghi — luôn là `null` lúc mới sinh ra, vì code không có khả năng tóm tắt ngôn ngữ tự nhiên:
+
+```json
+"795699": {
+  "label": "S1_1",
+  "question_i18n": { "vi": "...", "en": "..." },
+  "title_i18n": null,
+  ...
+}
+```
+
+**Claude (khi chạy qua skill, tức có AI) điền field này ngay sau ingestion** — nếu `metadata.json`
+đã có `title_i18n` khác `null` cho toàn bộ câu hỏi thì bỏ qua bước này (idempotent, giống Step 3b
+với `scale_class` — chỉ cần chạy **một lần** sau ingestion, không chạy lại ở các lần sửa
+`datatable.json` sau này):
+
+1. Đọc `question_i18n` (cả `vi` lẫn `en`) của từng câu trong `metadata.json`.
+2. Viết 1 tiêu đề ngắn gọn (5-10 từ) tóm tắt đúng nội dung câu hỏi, giữ nguyên ý, bỏ phần kỹ
+   thuật/lặp ("(Multiple answers allowed)", "SHOW ANSWER OF...", placeholder kiểu
+   `{QD9/802773/Selected}`) — làm **cho cả `vi` lẫn `en`**, ghi vào đúng field đó:
+   ```json
+   "title_i18n": { "vi": "Lý do chọn thương hiệu", "en": "Reasons for brand choice" }
+   ```
+3. **Câu matrix (`sub_questions`)** — mỗi sub-question cũng có field `title_i18n` riêng (không
+   có sẵn `question_i18n` như câu cha). Ghép tiêu đề của câu cha + `row_label` của dòng đó, VD
+   cha có `title_i18n.en = "Brand satisfaction"`, `row_label = "Brand A"` →
+   `"title_i18n": { "vi": "...", "en": "Brand satisfaction — Brand A" }`.
+4. Ghi đè lại `metadata.json` với các `title_i18n` đã điền.
+
+**Nếu chạy `surveyflow` không qua Claude** (VD chạy thẳng `run_pipeline.py`/`surveyflow-run` từ
+terminal, không có AI) → `title_i18n` giữ nguyên `null` cho mọi câu, vì bước tóm tắt chỉ Claude
+mới làm được — đây là hành vi đúng theo thiết kế, không phải lỗi.
+
+> Field này hiện **chỉ dừng ở `metadata.json`** — chưa có bước nào ở Table/Appendix đọc
+> `title_i18n` (khác với field `"title"` ở cấp stub trong `datatable.json`, vốn đã được dùng để
+> đặt tiêu đề slide appendix — xem Workflow D). Việc nối `title_i18n` vào các bước sau sẽ được
+> hướng dẫn ở lệnh tiếp theo.
+
 ### Step 3b — Classify SA AND Matrix_SA questions (Ordinal vs Nominal)
 
 > ⚠️ **Quét CẢ `SA` lẫn `Matrix_SA` — đây là lỗi thực tế đã xảy ra** (một agent khác từng lọc
@@ -278,20 +320,41 @@ factor(code) = code_max + code_min - code
 
 **2. Thang đo 1–5 → thêm T2B/B2B:**
 
-2 code gần đầu "cao nhất" của thang (theo `scale_high_code`) → `t2b_codes`; 2 code gần đầu
-"thấp nhất" → `b2b_codes`.
+> ⚠️ **T2B/B2B KHÔNG còn là stat riêng** (`"t2b"`/`"b2b"` trong `stats`) và KHÔNG còn dùng field
+> `t2b_codes`/`b2b_codes` — đây là format cũ, pipeline hiện **bỏ qua lặng lẽ** nếu còn gặp (không
+> lỗi, chỉ đơn giản không sinh hàng T2B/B2B nữa). T2B/B2B giờ là 1 **group entry bình thường**
+> ngay trong `choices` — dùng chung cơ chế group tổng quát (giống group "Increased"/"Decreased"
+> tuỳ ý ở Step 3d mục khác, hay group NUM range ở Stub rules). `stats` chỉ cần `"percent"` — group
+> luôn tự render kèm theo, không cần khai báo `"t2b"`/`"b2b"` trong `stats`.
+
+2 code gần đầu "cao nhất" của thang (theo `scale_high_code`) → group `"label": "T2B"`; 2 code gần
+đầu "thấp nhất" → group `"label": "B2B"`. Thêm 2 entry này vào **cuối** mảng `choices` (sau các
+entry `{"code":..,"factor":..}` per-choice):
 
 ```json
-{ "question": "C4", "stats": ["base", "percent", "mean", "t2b", "b2b"],
-  "t2b_codes": [4, 5], "b2b_codes": [1, 2] }
+{ "question": "C4", "stats": ["base", "percent", "mean"],
+  "choices": [
+    { "code": 1, "factor": 1 },
+    { "code": 2, "factor": 2 },
+    { "code": 3, "factor": 3 },
+    { "code": 4, "factor": 4 },
+    { "code": 5, "factor": 5 },
+    { "label": "T2B", "codes": [4, 5], "type": "combine" },
+    { "label": "B2B", "codes": [1, 2], "type": "combine" }
+  ]
+}
 ```
 
-Đảo ngược (`scale_high_code: 1`) → đảo luôn: `"t2b_codes": [1, 2], "b2b_codes": [4, 5]`.
+Đảo ngược (`scale_high_code: 1`) → đảo luôn:
+`{ "label": "T2B", "codes": [1, 2], "type": "combine" }`,
+`{ "label": "B2B", "codes": [4, 5], "type": "combine" }`.
 
 **3. Thang đo 1–10 hoặc 0–10 → thêm NPS groups + stat `"nps"`:**
 
 2 code gần đầu "cao nhất" → Promoters; 2 code kế tiếp → Passives; các code còn lại (đầu
-"thấp nhất") → Detractors.
+"thấp nhất") → Detractors. Stat `"nps"` **vẫn cần khai báo riêng** trong `stats` (khác T2B/B2B —
+NPS là 1 phép tính điểm số `%Promoters − %Detractors`, không phải chỉ 1 hàng % gộp đơn thuần, nên
+không tự động chạy chỉ nhờ có group trong `choices`):
 
 ```json
 { "question": "E9", "stats": ["base", "percent", "mean", "nps"],
@@ -306,6 +369,13 @@ factor(code) = code_max + code_min - code
 (Thang chỉ có 1–10, không có code 0 → Detractors = `[1,2,3,4,5,6]`.) Đảo ngược → Promoters
 luôn là 2 code gần đầu "cao nhất" theo `scale_high_code` (có thể là code nhỏ), Detractors là
 phần code ở đầu "thấp nhất" — không tính theo trị số tuyệt đối.
+
+**Giá trị hợp lệ cho `"type"`** trong 1 group entry (mảng `choices`, phân biệt hoa/thường, luôn
+viết thường): `"combine"` (mặc định, gộp thành 1 hàng % duy nhất — dùng cho T2B/B2B và mọi group
+tuỳ ý khác), `"netted"` (gộp thành 1 hàng % TỔNG, cộng thêm các hàng % riêng từng code bên dưới),
+`"promoters"`/`"detractors"` (chỉ 2 giá trị này được stat `"nps"` đọc để tính điểm số — xem mục 3).
+`"passive"` (hoặc bất kỳ chuỗi nào khác) không có ý nghĩa đặc biệt với code — chỉ hiển thị như 1
+group `"combine"` bình thường, dùng cho mục đích trình bày (VD tách riêng nhóm Passives ở giữa).
 
 **Câu Ordinal có thang đo khác 1–5 và 1–10/0–10** → chỉ thêm `"mean"` (mục 1), không tự
 thêm T2B/B2B/NPS.
@@ -543,8 +613,15 @@ R003,    0,     0,     0,     0,      1,      0,      0,       1
       }
     ],
     "stub": [
-      { "question": "Q10", "label": "Gender",    "stats": ["base", "percent"] },
-      { "question": "Q36", "label": "Food Freq", "stats": ["base", "percent", "t2b", "b2b", "mean"] }
+      { "question": "Q10", "label": "Gender",    "title": null, "stats": ["base", "percent"] },
+      { "question": "Q36", "label": "Food Freq", "title": null, "stats": ["base", "percent", "mean"],
+        "choices": [
+          { "code": 1, "factor": 1 }, { "code": 2, "factor": 2 }, { "code": 3, "factor": 3 },
+          { "code": 4, "factor": 4 }, { "code": 5, "factor": 5 },
+          { "label": "T2B", "codes": [4, 5], "type": "combine" },
+          { "label": "B2B", "codes": [1, 2], "type": "combine" }
+        ]
+      }
     ],
     "tables": [
       { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
@@ -770,7 +847,9 @@ Dùng trong table item có `matrix_orientation: "horizontal"`.
 
 ### Stub rules
 - One entry per question
-- `stats` options: `"base"`, `"percent"`, `"t2b"`, `"b2b"`, `"mean"`, `"std"`, `"se"`
+- `stats` options: `"base"`, `"percent"`, `"mean"`, `"std"`, `"se"`, `"nps"` — **không còn `"t2b"`/`"b2b"`**;
+  T2B/B2B giờ là group entry trong `choices` (`"type": "combine"`), tự render cùng `"percent"`, xem
+  Step 3c mục 2
 - `"title"` (optional, mặc định `null`) — tiêu đề ngắn gọn hiển thị trên đầu slide appendix
   (General lẫn Dzung_team), thay cho label gốc dài; xem "Tiêu đề slide tuỳ chỉnh" trong Workflow D
 - Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`

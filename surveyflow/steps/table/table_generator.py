@@ -20,8 +20,6 @@ _SUB_Q_RE = re.compile(r'^(.+?)_r(\d+)$', re.IGNORECASE)
 
 STAT_LABELS: dict[str, str] = {
     "base": "Base",
-    "t2b":  "T2B",
-    "b2b":  "B2B",
     "nps":  "NPS",
     "mean": "Mean",
     "std":  "Std",
@@ -30,7 +28,13 @@ STAT_LABELS: dict[str, str] = {
     "max":  "Max",
 }
 
-DEFAULT_STATS_ORDER = ["base", "percent", "t2b", "b2b", "nps", "mean", "std", "se", "min", "max"]
+# T2B/B2B are no longer distinct stat keywords -- they're defined as regular
+# "codes"-array group entries in a stub entry's "choices" (label "T2B"/"B2B",
+# "type": "combine"), rendered automatically whenever "percent" runs (see
+# _render_unified_choices_rows). Any stub entry still using the legacy
+# "stats": ["t2b", "b2b"] + "t2b_codes"/"b2b_codes" keys is silently ignored --
+# those keywords are unrecognized and produce no row (no error either).
+DEFAULT_STATS_ORDER = ["base", "percent", "nps", "mean", "std", "se", "min", "max"]
 
 NUMERIC_TYPES = {"SA", "NUM", "multiplenumber"}
 
@@ -2019,31 +2023,6 @@ def compute_table(
 
                     for code in display_codes:
                         rows.append(_sa_pct_row(code))
-
-            elif stat in ("t2b", "b2b"):
-                if atype not in CODEABLE_TYPES or not choices_i18n:
-                    continue
-                custom_key   = "t2b_codes" if stat == "t2b" else "b2b_codes"
-                custom_codes = sc.get(custom_key)
-                if custom_codes is not None:
-                    target = [str(c) for c in custom_codes]
-                else:
-                    sorted_codes = sorted(choices_i18n.keys(), key=lambda x: int(x))
-                    target = sorted_codes[-2:] if stat == "t2b" else sorted_codes[:2]
-                cnts: dict[int, int]   = {}
-                pcts: dict[int, float] = {}
-                for i in range(n):
-                    base = bases[i]
-                    if is_ma:
-                        cnt = sum(_code_count_ma(sub_dfs[i], ma_raw_cols, c) for c in target)
-                    else:
-                        cnt = sum(_code_count_sc(sub_dfs[i], q_col, c) for c in target)
-                    cnts[i] = cnt
-                    pcts[i] = cnt / base if base else 0.0
-                rows.append(StubRow(
-                    label=STAT_LABELS[stat], row_type=stat,
-                    counts=cnts, values=pcts,
-                ))
 
             elif stat == "nps":
                 if atype not in CODEABLE_TYPES or not choices_i18n:

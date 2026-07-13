@@ -54,7 +54,7 @@ def _brd(thick_left: bool = False, thick_bottom: bool = False) -> Border:
 
 _BORDER = _brd()   # plain thin border (backwards-compat alias)
 
-_STAT_TYPES = {"t2b", "b2b", "mean", "std", "se", "nps"}
+_STAT_TYPES = {"mean", "std", "se", "nps"}
 
 # ── Cell helpers ───────────────────────────────────────────────────────────────
 
@@ -386,7 +386,7 @@ def _write_sheet(
                     fnt = _BOLD if is_group else _NORMAL
                 else:
                     val = float(raw) if raw is not None else 0.0
-                    fmt = pct_fmt if stub_row.row_type in ("t2b", "b2b") else "0.00"
+                    fmt = "0.00"
                     fnt = _DARK_BOLD
 
                 _set(ws, r, col, val,

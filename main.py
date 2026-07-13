@@ -66,7 +66,7 @@ SURVEY_NAME = "VN8964" # str  — tên thư mục output
 # Bật/tắt từng bước
 FETCH_MCP    = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
 RUN_INGEST   = False  # True  = chạy lại ingestion (ghi đè data/)
-RUN_QUALITY  = False  # True  = chạy quality check → quality/quality_report.json
+RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
 GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
 

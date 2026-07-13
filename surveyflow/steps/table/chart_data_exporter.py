@@ -292,6 +292,32 @@ def _lookup_title(title_by_qcode: dict[str, str], question_code: str) -> str | N
     return title_by_qcode.get(base)
 
 
+def _flatten_meta_titles(metadata: dict | None, lang: str) -> dict[str, str]:
+    """question-code (upper) -> title, from metadata.json's AI-summarized
+    `title_i18n` (see CLAUDE.md Step 3a) — the fallback source for "title"
+    when the stub config doesn't set one, mirroring exactly how "label"
+    already falls back to metadata's `question_i18n` in table_generator.py.
+    Matrix sub_questions carry their own `title_i18n` (parent title + row
+    label, already combined by Step 3a), so no suffix-stripping is needed
+    here — only _lookup_title's ranking-suffix fallback needs it."""
+    out: dict[str, str] = {}
+    if not metadata:
+        return out
+
+    def _add(label: str | None, title_i18n: dict | None) -> None:
+        if not label or not title_i18n:
+            return
+        text = title_i18n.get(lang) or title_i18n.get("en") or title_i18n.get("vi")
+        if text:
+            out[str(label).strip().upper()] = text
+
+    for meta in metadata.get("questions", {}).values():
+        _add(meta.get("label"), meta.get("title_i18n"))
+        for sub in (meta.get("sub_questions") or {}).values():
+            _add(sub.get("label"), sub.get("title_i18n"))
+    return out
+
+
 # ── Main export function ──────────────────────────────────────────────────────
 
 def export_chart_data(
@@ -311,11 +337,16 @@ def export_chart_data(
         version:        Pipeline version string (e.g. "v1").
         metadata:       context["metadata"] — used to look up each SA question's
                          Claude-classified `scale_class` ("Ordinal"/"Nominal",
-                         see CLAUDE.md Step 3b) by question label.
+                         see CLAUDE.md Step 3b) by question label, and each
+                         question's AI-summarized `title_i18n` (Step 3a) as the
+                         fallback source for "title" when the stub config
+                         (datatable.json) doesn't set one — same
+                         override-then-fallback pattern "label" already uses.
         lang:           Display language used for this run's labels (e.g. "vi"/
                          "en") — embedded in the JSON so generate_pptx.py can
                          pick a language-appropriate Dzung_team section tag
-                         ("PHỤ LỤC" vs "APPENDIX") without a separate CLI flag.
+                         ("PHỤ LỤC" vs "APPENDIX") without a separate CLI flag,
+                         and selects which `title_i18n` language to fall back to.
 
     Returns:
         Absolute path of the written file.
@@ -336,6 +367,8 @@ def export_chart_data(
             # parent's.
             for sub in (meta.get("sub_questions") or {}).values():
                 _add(sub.get("label"), sub.get("scale_class"), sub.get("scale_high_code"))
+
+    title_by_meta = _flatten_meta_titles(metadata, lang)
 
     tables_out: list[dict] = []
 
@@ -362,7 +395,15 @@ def export_chart_data(
         def _append(q: dict | None) -> None:
             if not q:
                 return
-            q["title"] = _lookup_title(title_by_qcode, q.get("question", ""))
+            # Stub-authored title (datatable.json) wins if set; otherwise fall
+            # back to metadata.json's AI-summarized title_i18n — same
+            # override-then-fallback pattern "label" already uses against
+            # question_i18n. Rebuilt (not mutated) so "title" lands right
+            # after "question" in the JSON, not appended at the end.
+            code = q.get("question", "")
+            title = _lookup_title(title_by_qcode, code) or _lookup_title(title_by_meta, code)
+            q = {"question": code, "title": title,
+                 **{k: v for k, v in q.items() if k not in ("question", "title")}}
             questions_out.append(q)
 
         for block in blocks:

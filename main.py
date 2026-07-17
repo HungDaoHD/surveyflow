@@ -27,8 +27,8 @@ from qme_auth import get_access_token
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-# SURVEY_ID   = 723334              # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
+SURVEY_ID   = 723334              # int  — survey ID từ QMe
+SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
 # SURVEY_ID   = 723306                     # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
@@ -48,8 +48,8 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 723480             # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8894 - Express" # str  — tên thư mục output
 
-SURVEY_ID   = 723450   # int  — survey ID từ QMe
-SURVEY_NAME = "VN8964" # str  — tên thư mục output
+# SURVEY_ID   = 723450   # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
 # SURVEY_ID   = 723442               # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8963 - LIPOVITAN" # str  — tên thư mục output
@@ -64,11 +64,12 @@ SURVEY_NAME = "VN8964" # str  — tên thư mục output
 
 
 # Bật/tắt từng bước
-FETCH_MCP    = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
-RUN_INGEST   = False  # True  = chạy lại ingestion (ghi đè data/)
+FETCH_MCP     = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
+FORCE_REFRESH = False  # True  = bỏ qua cache TTL của MCP, luôn tạo export job mới (chỉ áp dụng khi FETCH_MODE = "export")
+RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
-GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
+GENERATE_PPTX = False  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
 
 # Format appendix: "general" (mặc định) | "dzung_team" (style công ty Dzung_team)
 # None = tự đọc field "appendix_format" của table trong datatable.json (mặc định "general"
@@ -160,7 +161,7 @@ def main():
     print("=" * 60)
     print(f"  SurveyFlow Runner")
     print(f"  Survey  : {SURVEY_NAME}  (id={SURVEY_ID})")
-    print(f"  Mode    : fetch={FETCH_MODE}")
+    print(f"  Mode    : fetch={FETCH_MODE}  force_refresh={FORCE_REFRESH}")
     print(f"  Steps   : fetch={FETCH_MCP}  ingest={RUN_INGEST}  quality={RUN_QUALITY}  table={RUN_TABLE}")
     print(f"  Lang    : {LANG}")
     print(f"  Appendix: pptx={GENERATE_PPTX}  format={APPENDIX_FORMAT or 'auto (per datatable.json)'}")
@@ -178,12 +179,13 @@ def main():
         if not FETCH_MCP:
             print(f"\n[fetch] {sentinel} not found → fetching automatically …")
         FetchStep().run({
-            "client":    _make_client(MCP_URL),
-            "survey_id": SURVEY_ID,
-            "mcp_dir":   str(mcp_dir),
-            "mode":      FETCH_MODE,
-            "date_from": DATE_FROM,
-            "date_to":   DATE_TO,
+            "client":        _make_client(MCP_URL),
+            "survey_id":     SURVEY_ID,
+            "mcp_dir":       str(mcp_dir),
+            "mode":          FETCH_MODE,
+            "date_from":     DATE_FROM,
+            "date_to":       DATE_TO,
+            "force_refresh": FORCE_REFRESH,
         })
     else:
         print(f"\n[fetch] Skipped ({sentinel} exists)")

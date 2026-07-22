@@ -27,8 +27,8 @@ from qme_auth import get_access_token
 #  RUN CONFIG  ← chỉnh tại đây
 # ══════════════════════════════════════════════════════════
 
-SURVEY_ID   = 723334              # int  — survey ID từ QMe
-SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
+# SURVEY_ID   = 723334              # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 
 # SURVEY_ID   = 723306                     # int  — survey ID từ QMe
 # SURVEY_NAME = "VN8954-BHT Job Site 2026" # str  — tên thư mục output
@@ -57,31 +57,37 @@ SURVEY_NAME = "VN8966_DUC_Random" # str  — tên thư mục output
 # SURVEY_ID   = 716642                  # int  — survey ID từ QMe
 # SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output
 
-# SURVEY_ID   = 723512               # int  — survey ID từ QMe
-# SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
+SURVEY_ID   = 723512               # int  — survey ID từ QMe
+SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
 
 
 
 
 # Bật/tắt từng bước
-FETCH_MCP     = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
+FETCH_MCP     = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
 FORCE_REFRESH = False  # True  = bỏ qua cache TTL của MCP, luôn tạo export job mới (chỉ áp dụng khi FETCH_MODE = "export")
-RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
-RUN_QUALITY  = True  # True  = chạy quality check → quality/quality_report.json
+RUN_INGEST   = False  # True  = chạy lại ingestion (ghi đè data/)
+RUN_QUALITY  = False  # True  = chạy quality check → quality/quality_report.json
 RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
-GENERATE_PPTX = False  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
+GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
 
-# Format appendix: "general" (mặc định) | "dzung_team" (style công ty Dzung_team)
-# None = tự đọc field "appendix_format" của table trong datatable.json (mặc định "general"
+# Format appendix: "default" (mặc định, style công ty) | "general" (style mặc định của surveyflow)
+# None = tự đọc field "appendix_format" của table trong datatable.json (mặc định "default"
 # nếu table không có field này); đặt cứng ở đây sẽ GHI ĐÈ field đó cho lần chạy này.
-APPENDIX_FORMAT = "dzung_team"   # hoặc "general" / "dzung_team"
+APPENDIX_FORMAT = "default"   # hoặc "general" / "default"
+
+# Logo khách hàng (chỉ áp dụng khi APPENDIX_FORMAT = "default"): "acecook" (mặc định, đã có sẵn
+# trong template) | "none" (chỉ dùng logo Q&Me, không có logo khách hàng) | đường dẫn tới file
+# ảnh logo của khách hàng khác. None = tự đọc field "appendix_logo" của table trong
+# datatable.json (mặc định "acecook" nếu table không có field này).
+APPENDIX_LOGO = "none"     # "acecook" / "none" / "path/to/logo.png"
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
 LANG = "en"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
-TABLE_VERSION = "V1"   # hoặc đặt cứng, ví dụ: "v2"
+TABLE_VERSION = "V2"   # hoặc đặt cứng, ví dụ: "v2"
 
 # ── Fetch mode ──────────────────────────────────────────────
 # "rows"   = get_survey_definition + get_survey_rows
@@ -164,7 +170,7 @@ def main():
     print(f"  Mode    : fetch={FETCH_MODE}  force_refresh={FORCE_REFRESH}")
     print(f"  Steps   : fetch={FETCH_MCP}  ingest={RUN_INGEST}  quality={RUN_QUALITY}  table={RUN_TABLE}")
     print(f"  Lang    : {LANG}")
-    print(f"  Appendix: pptx={GENERATE_PPTX}  format={APPENDIX_FORMAT or 'auto (per datatable.json)'}")
+    print(f"  Appendix: pptx={GENERATE_PPTX}  format={APPENDIX_FORMAT or 'auto (per datatable.json)'}  logo={APPENDIX_LOGO or 'auto (per datatable.json)'}")
     print("=" * 60)
 
     # ── Step 1: Fetch ──────────────────────────────────────────────────────────
@@ -220,9 +226,9 @@ def main():
         chart_data_path = output_dir / version / "chart_data.json"
         slides_path     = output_dir / version / "slides.pptx"
         if chart_data_path.exists():
-            print(f"\n[pptx] Generating slides -> {slides_path}  (format={APPENDIX_FORMAT or 'auto'})")
+            print(f"\n[pptx] Generating slides -> {slides_path}  (format={APPENDIX_FORMAT or 'auto'}, logo={APPENDIX_LOGO or 'auto'})")
             from surveyflow.steps.appendix.generate_pptx import generate as gen_pptx
-            gen_pptx(str(chart_data_path), str(slides_path), style=APPENDIX_FORMAT)
+            gen_pptx(str(chart_data_path), str(slides_path), style=APPENDIX_FORMAT, logo=APPENDIX_LOGO)
         else:
             print(f"\n[pptx] chart_data.json not found at {chart_data_path} -- skipping")
 

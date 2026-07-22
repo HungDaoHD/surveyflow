@@ -49,7 +49,7 @@ python -c "import surveyflow; print(surveyflow.__version__)"
 ### 2. Cài skill trong Claude Code
 
 Mở Claude Code → Settings → Skills → Add skill file:
-- `skills/fieldcheck-dp.skill` — workflow chính: fetch / ingest / check / datatable / PPTX
+- `.skill_work/fieldcheck-dp.skill` — workflow chính: fetch / ingest / check / datatable / PPTX
 
 Sau khi cài, Claude tự nhận diện khi bạn nói về survey.
 

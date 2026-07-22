@@ -653,7 +653,8 @@ class TableStep(Step):
                 "banner_cols": [bc.to_dict() for bc in item["banner_cols"]],
                 "blocks":      [b.to_dict()  for b  in item["blocks"]],
                 "tables":      item["cfg"].get("tables", []),
-                "appendix_format": item["cfg"].get("appendix_format", "general"),
+                "appendix_format": item["cfg"].get("appendix_format", "default"),
+                "appendix_logo":   item["cfg"].get("appendix_logo", "acecook"),
                 "stub":        item["cfg"].get("stub", []),
             }
             for item in computed

@@ -12,31 +12,28 @@ description: >
 
 # SurveyFlow Skill
 
-This skill guides Claude through the full surveyflow pipeline:
-**Fetch MCP → Ingestion → Design datatable.json → Table (xlsx)**
+**Fetch / Upload zip → Ingestion → Quality check (optional) → Datatable → Appendix slides**
+
+> ⚠️ **Behavior rule — BẮT BUỘC:**
+> Claude **KHÔNG tự suy đoán và thực hiện các bước ngoài skill**.
+> Nếu không rõ bước nào, hoặc gặp issue → **hỏi lại user trước** khi tiếp tục.
+> Không tự ý skip bước, đoán tên survey, hoặc chạy pipeline khi chưa đủ thông tin.
 
 ---
 
 ## How to start
 
-User có thể bắt đầu bằng nhiều cách:
-
 ```
 /fieldcheck-dp run pipeline VN8966
-/fieldcheck-dp run pipeline VN8894 - Express
 chạy survey VN8966
-làm bảng cho VN8966
+làm bảng cho VN8894 - Express
 fetch data VN8894
 chạy quality check VN8966
 ```
 
-**SURVEY_NAME** = tên folder output, thường là:
-- Survey code ngắn: `VN8966`
-- Hoặc tên đầy đủ: `VN8894 - Express` (nếu tên có dấu cách, dùng quotes trong CLI)
-
 Nếu user không nói tên survey → hỏi ngay: *"Bạn muốn chạy survey nào?"*
 
-Nếu user nói **"hướng dẫn"**, **"help"**, **"dùng như thế nào"**, **"giải thích"** → đọc `skills/surveyflow/USER_GUIDE.md` và present toàn bộ nội dung cho user.
+Nếu user nói **"hướng dẫn / help / giải thích"** → đọc `docs/USER_GUIDE.md` và present cho user.
 
 ---
 
@@ -55,24 +52,18 @@ For local dev: `pip install -e . --no-deps --break-system-packages -q`
 
 ```
 output/SURVEY_NAME/
-├── mcp/                    ← raw MCP files (fetch once, reuse)
+├── mcp/                    ← raw MCP files
 │   ├── definition.json
 │   └── data_export.csv
-├── data/                   ← rawdata.csv + metadata.json (ingestion output, reused)
+├── data/                   ← rawdata.csv + metadata.json
 ├── datatable/
-│   └── datatable.json      ← Claude manages this
+│   └── datatable.json
 ├── quality/                ← quality check output (optional)
-│   ├── quality_report.json
-│   └── flagged_profiles.csv
 ├── v1/
-│   ├── datatable.xlsx      ← bảng crosstab
-│   ├── chart_data.json     ← tự sinh kèm datatable.xlsx, dùng cho PPTX
-│   └── slides.pptx         ← PPTX appendix (nếu đã tạo — Workflow D)
-├── v2/
 │   ├── datatable.xlsx
 │   ├── chart_data.json
 │   └── slides.pptx
-└── ...
+└── v2/, v3/, ...
 ```
 
 ---
@@ -81,30 +72,19 @@ output/SURVEY_NAME/
 
 ### Step 0 — Show progress tracker
 
-Immediately show progress tracker, then execute steps one by one:
-
 ```
 📋 Pipeline: SURVEY_NAME
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⏳ 1. Tìm survey         — đang tìm...
-⬜ 2. Fetch data
+⬜ 2. Lấy data
 ⬜ 3. Ingestion
-⬜ 4. Chọn cột / hàng
+⬜ 4. Chọn banner / stub
 ⬜ 5. Chạy bảng
 ⬜ 6. PPTX appendix      (tuỳ chọn)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Icons: `⏳` đang chạy · `✅` xong · `⬜` chờ · `❌` lỗi
-
-If quality check is requested, add it between steps 3 and 4:
-```
-✅ 3. Ingestion          — 450 responses
-⏳ 3b. Quality check    — đang chạy...
-⬜ 4. Chọn cột / hàng
-```
-
-Always end each update with a **clear next-action hint** for the user.
+Icons: `⏳` đang chạy · `✅` xong · `⬜` chờ · `❌` lỗi. Always end each update with a next-action hint.
 
 ---
 
@@ -114,87 +94,62 @@ Always end each update with a **clear next-action hint** for the user.
 search_surveys(query="SURVEY_NAME")
 ```
 
-Note the `survey_id`. If multiple results → show list and ask user to confirm which one.
+Note the `survey_id`. If multiple results → show list, ask user to confirm.
 
 ---
 
-### Step 2 — Fetch MCP data
+### Step 2 — Lấy data
 
-**First**, check if `output/SURVEY_NAME/mcp/` already has `definition.json` + `data_export.csv`:
-- **Files exist** → Ask: *"Data đã có sẵn. Dùng data cũ hay fetch lại?"*
-- **Files missing** → Fetch immediately (no confirmation needed)
+**Nếu `output/SURVEY_NAME/mcp/` đã có `definition.json` + `data_export.csv`:**
+→ Hỏi: *"Data đã có sẵn. Dùng data cũ hay lấy lại?"*
 
-> ⚠️ **Fetch rules:**
-> - **ALWAYS** `format="code"` — NEVER `format="text"`
-> - Never use `get_survey_rows`
-> - MCP returns structuredContent (dict). Use Write tool with `json.dumps(result, ensure_ascii=False, indent=2)`
-> - `data_export.csv`: write with `encoding="utf-8-sig"` (BOM for Excel)
-> - **Profile status**: default `approved` only. If user wants pending profiles: note `--profile-status approved,pending`
+**Nếu chưa có data** → Hỏi user:
+> *"Bạn muốn **fetch từ QMe** hay **upload file zip** từ Fieldcheck?"*
 
-**Step A — Definition:**
+- **Fetch từ QMe** → Step 2A
+- **Upload zip** → Step 2B
+
+> ⚠️ Fetch rules: `format="code"` always · Never use `get_survey_rows` · Write tool for JSON/CSV · `data_export.csv` encoding=`utf-8-sig`
+
+**Step 2A — Fetch từ QMe:**
+
 ```
-get_survey_definition(survey_id)
-  → save to output/SURVEY_NAME/mcp/definition.json
-```
+get_survey_definition(survey_id)  → output/SURVEY_NAME/mcp/definition.json
 
-**Step B — Export CSV:**
-```
-# 1. Trigger export job
 prepare_survey_data_file(survey_id, format="code", force_refresh=False)
+  → job_id
 
-# 2. Poll until ready (repeat every retry_after_seconds)
-get_survey_data_file_status(job_id)
+get_survey_data_file_status(job_id)   ← poll every retry_after_seconds until status=="ready"
+  → If stuck after 3+ polls: stop → tell user to export zip manually → switch to Step 2B
 
-# If stuck (no change after 3+ polls) → STOP immediately → tell user:
-# "Job bị stuck. Vui lòng export file zip từ Fieldcheck và upload vào đây."
-# → Continue with Workflow A — Fallback (upload zip) below
-
-# 3. Read all chunks
-read_survey_data_file(job_id, file="data", offset=0,    limit=500)
-read_survey_data_file(job_id, file="data", offset=500,  limit=500)
-... keep reading until pagination.has_more == false
-
-# 4. Assemble chunks → save as data_export.csv (encoding="utf-8-sig")
+read_survey_data_file(job_id, offset=0,   limit=500)
+read_survey_data_file(job_id, offset=500, limit=500)
+... until pagination.has_more == false
+→ Assemble all chunks → write to output/SURVEY_NAME/mcp/data_export.csv (utf-8-sig)
 ```
 
-After fetch: tell user `"✅ Fetch xong — {N} responses"`.
+Tell user: `"✅ Fetch xong — {N} responses"`
 
----
-
-### Step 2 fallback — Upload zip (khi fetch bị stuck)
-
-User uploads a zip file exported manually from Fieldcheck.
+**Step 2B — Upload zip:**
 
 ```python
 import zipfile, os
-
 with zipfile.ZipFile('uploaded.zip') as z:
-    data_file = next(
-        (n for n in z.namelist() if n.startswith('code_retail_report_')),
-        None
-    )
+    data_file = next((n for n in z.namelist() if n.startswith('code_retail_report_')), None)
     if not data_file:
         raise ValueError("Không tìm thấy file code_retail_report_* trong zip")
-    with z.open(data_file) as src:
-        content = src.read().decode('utf-8-sig')
-
+    content = z.open(data_file).read().decode('utf-8-sig')
 os.makedirs('output/SURVEY_NAME/mcp', exist_ok=True)
-with open('output/SURVEY_NAME/mcp/data_export.csv', 'w', encoding='utf-8-sig') as dst:
-    dst.write(content)
+with open('output/SURVEY_NAME/mcp/data_export.csv', 'w', encoding='utf-8-sig') as f:
+    f.write(content)
 ```
 
 > Nếu `definition.json` chưa có: fetch bằng `get_survey_definition(survey_id)` trước.
-
-Continue to Step 3.
 
 ---
 
 ### Step 3 — Run ingestion
 
-Run **immediately after `definition.json` is saved** — do not wait for `data_export.csv`.
-This generates `metadata.json` so the datatable builder can be shown to user while CSV is still fetching.
-
-**Full ingestion** (when `data_export.csv` is ready):
 ```bash
 python run_pipeline.py \
   --mcp-dir    output/SURVEY_NAME/mcp \
@@ -202,157 +157,281 @@ python run_pipeline.py \
   --output-dir output/SURVEY_NAME
 ```
 
-**Metadata-only** (when CSV not yet available — generates metadata.json from definition only):
-```bash
-python run_pipeline.py \
-  --mcp-dir    output/SURVEY_NAME/mcp \
-  --output-dir output/SURVEY_NAME
-```
-> Full ingestion will run again once data_export.csv is ready.
+Output: `data/rawdata.csv` + `data/metadata.json`
 
-**Output:**
-- `data/rawdata.csv`
-- `data/metadata.json` ← question labels + choice codes
-
-After ingestion, always tell user:
+After ingestion, tell user:
 
 ```
 ✅ Ingestion xong — {N} rows, metadata.json sẵn sàng.
 
 💡 Bạn có muốn chạy quality check trước khi tạo bảng không?
-   Quality check sẽ kiểm tra toàn bộ {N} respondents xem có ai:
-   - Bỏ qua câu hỏi bắt buộc
-   - Được route đến câu nhưng không trả lời
-   - Trả lời câu không được hiển thị
-   - Có câu trả lời mâu thuẫn nhau
-
-   Gõ "chạy quality" hoặc "bỏ qua" để tiếp tục tạo bảng.
+   Gõ "chạy quality" hoặc "bỏ qua" để tiếp tục.
 ```
 
-**Chỉ chạy quality check khi user xác nhận** — không tự động chạy.
+**Chỉ chạy quality check khi user xác nhận.**
+
+Sau đó (không cần đợi quality check) → luôn chạy **Step 3a — Tóm tắt title_i18n** và
+**Step 3c — Phân loại câu SA/Matrix_SA** trước khi sang Step 4 (thứ tự giữa 3a/3c không quan
+trọng, độc lập nhau).
+
+---
+
+### Step 3a — Tóm tắt tiêu đề câu hỏi (title_i18n)
+
+`parse_metadata()` (code) đã tự ghi field **`title_i18n: null`** vào mọi câu hỏi trong
+`metadata.json` (và mọi entry trong `sub_questions` của câu matrix) — code không tự tóm tắt được,
+chỉ Claude mới điền nội dung thật. **Bỏ qua bước này nếu mọi câu đã có `title_i18n` khác `null`**
+(idempotent, chỉ chạy 1 lần sau ingestion, giống Step 3c với `scale_class`).
+
+1. Đọc `question_i18n` (`vi` + `en`) từng câu.
+2. Viết tiêu đề ngắn gọn (5-10 từ), giữ đúng ý, bỏ phần kỹ thuật/lặp ("(Multiple answers
+   allowed)", placeholder `{QD9/802773/Selected}`...) — làm cho cả `vi` lẫn `en`:
+   ```json
+   "title_i18n": { "vi": "Lý do chọn thương hiệu", "en": "Reasons for brand choice" }
+   ```
+3. **Matrix sub_questions** — không có sẵn `question_i18n` riêng, ghép tiêu đề câu cha +
+   `row_label` của dòng đó: `{ "en": "Brand satisfaction — Brand A" }`.
+4. Ghi đè `metadata.json`.
+
+Chạy `run_pipeline.py`/`surveyflow-run` thẳng từ terminal (không qua Claude) → `title_i18n` giữ
+`null` mãi mãi, đúng thiết kế (không phải lỗi). `title_i18n` giờ **đã nối vào chart_data.json**:
+khi table step tạo `chart_data.json`, mỗi câu có field `"title"` (ngay sau `"question"`) —
+lấy từ `"title"` của stub trong `datatable.json` nếu có, không thì tự fallback sang
+`title_i18n[lang]` của câu đó trong `metadata.json` (giống hệt cách `"label"` fallback sang
+`question_i18n`). Nhờ vậy chỉ cần làm Step 3a **một lần** sau ingestion là mọi slide appendix
+sau này tự có tiêu đề tóm tắt, không cần set `"title"` thủ công cho từng stub entry.
 
 ---
 
 ### Step 3b — Quality check (user confirms)
 
-Chỉ chạy khi user đồng ý (sau khi được thông báo ở Step 3).
-Cũng có thể chạy bất cứ lúc nào khi user nói: *"chạy quality", "kiểm tra data", "check lỗi routing"*.
+Chạy khi user đồng ý, hoặc khi user nói: *"chạy quality", "kiểm tra data", "check lỗi routing"*.
 
 ```bash
-python run_pipeline.py \
-  --output-dir output/SURVEY_NAME \
-  --run-quality
+python run_pipeline.py --output-dir output/SURVEY_NAME --run-quality
 ```
 
-#### After running — always present summary
-
-Read `quality_report.json` and present:
+Read `quality/quality_report.json` và present:
 
 ```
 📊 Quality Report — SURVEY_NAME
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Tổng respondents  : {total_respondents}
-Bị flag           : {flagged_count} profile ({pct:.1f}%)
+Bị flag           : {flagged_count} ({pct:.1f}%)
 
 Loại vi phạm:
-  ❌ missing          {n}  — câu luôn hiển thị nhưng không có trả lời
-  ⚠️  routed_missing   {n}  — được route đến nhưng không trả lời
-  🔍 extraneous       {n}  — trả lời câu không được hiển thị
-  💥 contradiction    {n}  — câu trả lời mâu thuẫn nhau
+  ❌ missing          {n}
+  ⚠️  routed_missing   {n}
+  🔍 extraneous       {n}
+  💥 contradiction    {n}
 
-Câu bị flag nhiều nhất:
-  {Q_label} ({question_text})  — {N} lần  (missing: n, routed_missing: n)
-  ...top 5...
-
-Phạm vi kiểm tra:
-  show_condition : {n_sc} câu
-  contradiction  : {n_cs} câu
-  always shown   : {n_always} câu
+Câu bị flag nhiều nhất (top 5):
+  {Q_label} — {N} lần
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📄 Chi tiết: output/SURVEY_NAME/quality/flagged_profiles.csv
 ```
 
-**Summary rules:**
-- `pct = flagged_count / total_respondents * 100`
-- Top 5 questions: group by `question`, count by type, sort by total desc
-- If `flagged_count == 0` → `"✅ Không có vi phạm nào."`
-
-**Actionable next steps — always show after summary:**
-
-| Loại vi phạm chủ yếu | Gợi ý |
-|---|---|
-| `missing` optional | Bình thường — không cần xử lý |
-| `missing` mandatory | Báo cáo team — profile có thể cần loại |
-| `routed_missing` nhiều | Khả năng lỗi survey logic — check với PM |
-| `extraneous` | Lỗi routing QMe — nên báo cáo |
-| `contradiction` | Profile vi phạm logic — thường loại trước khi chạy bảng |
+If `flagged_count == 0` → `"✅ Không có vi phạm nào."`
 
 Sau đó hỏi: *"Bạn muốn xem chi tiết câu nào, hay tiếp tục chạy bảng?"*
 
-#### Drill-down khi user hỏi thêm
+**Drill-down:** "Xem chi tiết Q5" → filter violations by question · "Profile bị lỗi nhiều nhất" → group by profile_id top 10 · "Chỉ xem contradiction" → filter by type.
 
-**"Xem chi tiết câu Q5"** → filter `violations` where `question == "Q5"`, show table (10 rows):
+---
+
+### Step 3c — Phân loại câu SA VÀ Matrix_SA (Ordinal / Nominal)
+
+> ⚠️ **Quét CẢ `SA` lẫn `Matrix_SA` — lỗi thực tế đã xảy ra**: lọc cứng `answer_type == "SA"`
+> sẽ bỏ sót toàn bộ Matrix_SA (VD Q17/Q15/Q11/Q6_A-kiểu-câu), khiến chúng không bao giờ có
+> `scale_class` → không bao giờ tự thêm mean/T2B/NPS ở Step 3d. Matrix_SA phải ghi
+> `scale_class` vào **CẢ entry cha lẫn từng entry trong `sub_questions`** (chỉ ghi entry cha
+> không đủ — appendix PPTX khớp theo mã sub-question như `A4_r1`, không phải mã câu cha).
+
+Chạy tự động ngay sau ingestion — không cần hỏi user (giống Step 3, không phải hành động
+phá huỷ dữ liệu). **Bỏ qua bước này nếu `metadata.json` đã có field `scale_class`** (đã
+phân loại từ lần chạy trước).
+
+Claude đọc từng câu `answer_type: "SA"` **và** `answer_type: "Matrix_SA"` trong `metadata.json`
+(question_i18n + choices_i18n, với Matrix_SA thì đọc `choices_i18n.columns`) và tự phân loại —
+dùng khả năng đọc hiểu ngữ cảnh, **không phải rule cố định trong code**:
+
+| Loại câu hỏi | Tên nên dùng | Lưu vào `scale_class` |
+|---|---|---|
+| SA/Matrix_SA có thang đo (rating, mức độ đồng ý, purchase intent, tần suất, willingness-to-pay, time-since...) | SA Scale / SA Likert Scale | `"Ordinal"` |
+| SA/Matrix_SA phân loại thường (demographic, brand, tradeoff, typology, awareness...) | SA Categorical / SA Nominal | `"Nominal"` |
+
+> ⚠️ **Kiểm tra chiều thang đo — ghi thêm `scale_high_code` cho thang ĐẢO NGƯỢC.** Đừng giả định
+> code lớn = điểm cao. Một số thang (đặc biệt **tần suất**) đánh số ngược: code 1 = mức cao nhất
+> ("Hầu như mỗi ngày"), code lớn nhất = thấp nhất ("Ít hơn 1 lần/tháng"). Khi phân loại 1 câu là
+> `Ordinal` mà **code nhỏ nhất là đầu "cao nhất"** của thang → ghi thêm field **`scale_high_code`** =
+> code đầu cao đó (VD `1`). Step 3d dùng field này để tính mirror factor + nhóm NPS đúng chiều; thiếu
+> nó → mean/T2B/NPS sai chiều. **Bỏ qua** field này nếu code lớn nhất đã là đầu "cao nhất" (trường
+> hợp thường gặp — satisfaction/agreement/purchase intent). Matrix_SA: ghi vào **cả entry cha lẫn
+> từng `sub_questions`**, giống `scale_class`.
+
+```python
+import json
+path = 'output/SURVEY_NAME/data/metadata.json'
+with open(path, encoding='utf-8') as f:
+    meta = json.load(f)
+qs = meta['questions']
+
+# Claude đọc question_i18n + choices_i18n (Matrix_SA: choices_i18n.columns) của từng câu
+# SA/Matrix_SA chưa có scale_class, tự quyết định "Ordinal" hoặc "Nominal" rồi gán:
+# qs[qid]['scale_class'] = "Ordinal"   # hoặc "Nominal"
+# Thang ĐẢO NGƯỢC (code nhỏ nhất = đầu cao nhất, VD thang tần suất) → ghi thêm scale_high_code:
+# qs[qid]['scale_high_code'] = 1       # code đầu "cao nhất"; BỎ QUA nếu code lớn nhất đã là đầu cao
+# Matrix_SA: PHẢI gán CẢ scale_class LẪN scale_high_code cho từng sub_questions entry, không chỉ cha:
+# for sub in qs[qid].get('sub_questions', {}).values():
+#     sub['scale_class'] = qs[qid]['scale_class']
+#     if 'scale_high_code' in qs[qid]: sub['scale_high_code'] = qs[qid]['scale_high_code']
+
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(meta, f, ensure_ascii=False, indent=2)
 ```
-profile_id | type           | detail                          | condition_trigger
------------|----------------|---------------------------------|------------------
-123456     | routed_missing | condition met but no answer...  | Q3 in [1,2]
+
+Sau khi ghi xong, **luôn báo cho user** số câu mỗi loại + liệt kê tên từng câu (dùng
+`label`, không phải `question_id`):
+
+```
+📐 Phân loại câu SA/Matrix_SA — SURVEY_NAME
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Ordinal ({n} câu): {label1}, {label2}, ...
+Nominal ({m} câu): {label1}, {label2}, ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👉 Câu Ordinal sẽ tự động thêm "mean" vào stats khi tạo datatable.json.
+Bạn có muốn đổi lại loại của câu nào không?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-**"Profile nào bị lỗi nhiều nhất?"** → group by `profile_id`, count, show top 10.
+> Ví dụ Ordinal: thang hài lòng (1–5), tần suất (Never→Always), mức độ đồng ý, purchase
+> intent (Definitely won't buy→Definitely will buy), willingness-to-pay bands, time-since bands.
+> Ví dụ Nominal: giới tính, khu vực — kể cả **Age/Income dạng bracket** (banner/demographic
+> var, không tính mean dù có thứ tự), thương hiệu, loại sản phẩm, tradeoff/typology choices.
 
-**"Chỉ xem contradiction"** → filter by `type == "contradiction"`.
+Nếu user đổi loại một câu ("đổi Q10 thành Nominal") → sửa `scale_class` trong
+`metadata.json` cho câu đó, ghi đè lại file, xác nhận với user.
+
+---
+
+### Step 3d — Detect Ordinal (tự động thêm stats/factor/group codes)
+
+Khi thêm câu `scale_class: "Ordinal"` vào `stub` (Step 4), tự động bổ sung thêm — không cần
+user yêu cầu riêng (bỏ qua meta code 98/99 trong mọi phép tính):
+
+1. **Mọi câu Ordinal → thêm `"mean"` vào `stats` + LUÔN thêm `"factor"` cho từng choice**
+   (bắt buộc — thiếu factor dù chỉ 1 code sẽ khiến pipeline âm thầm trả mean=0.0, không có
+   fallback tính trên code gốc). Không đảo ngược → `factor(code) = code` (identity). Đảo
+   ngược (`scale_high_code` = code nhỏ nhất) → `factor(code) = code_max + code_min - code`.
+   **Chỉ 1 format được hỗ trợ:** per-choice `"choices": [{"code":.., "factor":..}]` — KHÔNG
+   có top-level `"factors"`/`"mean_factor"` (đã bị bỏ hẳn khỏi pipeline) hay `"factor"` số ít
+   (chưa từng được hỗ trợ) — cả 2 đều dẫn tới mean âm thầm = 0.0, đã xảy ra thực tế 2 lần.
+   Matrix_SA: code lấy từ `choices_i18n.columns`, **KHÔNG BAO GIỜ** từ `.rows` (rows = item
+   được đánh giá như brand, không phải thang đo) — cũng là bug thực tế đã xảy ra.
+
+   **⚠️ NGOẠI LỆ — câu tần suất (frequency): KHÔNG áp dụng mục 1 tự động.** Thang tần suất
+   (VD "Hàng ngày/Vài lần tuần/Hiếm khi/Không bao giờ") thường không có 1 factor "đúng" hiển
+   nhiên (khoảng cách giữa các mức không đều, hoặc có mức bất thường phá vỡ thứ tự). Gặp câu
+   Ordinal dạng tần suất → **hỏi user trước**: *"Câu {label} là thang tần suất. Bạn muốn tự
+   nhập factor cho từng mức hay để pipeline coi câu này là Nominal (không tính mean)?"*
+   - User cung cấp factor → dùng đúng giá trị đó, giữ `scale_class: "Ordinal"`, vẫn áp
+     T2B/B2B/NPS bình thường theo range (mục 2-3 dưới đây).
+   - User chọn bỏ qua → sửa `scale_class` câu đó thành `"Nominal"` trong `metadata.json`
+     (Matrix_SA: cả entry cha + từng `sub_questions`), stub chỉ giữ `["base","percent"]`.
+2. **Thang 1–5** → thêm 2 group entry vào cuối mảng `choices` (KHÔNG thêm `"t2b"`/`"b2b"` vào
+   `stats` — 2 stat name này không còn tồn tại, dùng format cũ sẽ bị bỏ qua lặng lẽ):
+   ```json
+   { "label": "T2B", "codes": [4, 5], "type": "combine" },
+   { "label": "B2B", "codes": [1, 2], "type": "combine" }
+   ```
+   2 code gần đầu "cao nhất" theo `scale_high_code` → T2B; 2 code gần đầu "thấp nhất" → B2B.
+   `stats` chỉ cần có `"percent"` — group tự render kèm theo.
+3. **Thang 1–10 hoặc 0–10** → thêm `"nps"` vào `stats` + `choices` groups:
+   ```json
+   "choices": [
+     { "type": "promoters",  "codes": [9, 10],              "label": "Promoters" },
+     { "type": "passive",    "codes": [7, 8],                "label": "Passives" },
+     { "type": "detractors", "codes": [0, 1, 2, 3, 4, 5, 6], "label": "Detractors" }
+   ]
+   ```
+   (thang 1–10 không có code 0 → Detractors bỏ code 0.) Đảo ngược → nhóm theo khoảng cách
+   tới `scale_high_code`, không theo trị số tuyệt đối.
+
+Thang đo khác 1–5 và 1–10/0–10 → chỉ thêm `"mean"` (mục 1).
+
+**`"type"` hợp lệ trong group entry** (viết thường): `"combine"` (mặc định, gộp 1 hàng %) ·
+`"netted"` (gộp 1 hàng % tổng + các hàng % riêng từng code bên dưới) · `"promoters"`/`"detractors"`
+(chỉ 2 giá trị này được stat `"nps"` đọc để tính điểm). `"passive"` chỉ có ý nghĩa trình bày,
+tương đương `"combine"`.
 
 ---
 
 ### Step 4 — Design datatable.json
 
-**If user already specified requirements** → create `output/SURVEY_NAME/datatable/datatable.json` directly, then go to Step 5.
+**Nếu user đã chỉ định yêu cầu** → tạo `datatable/datatable.json` trực tiếp, sang Step 4b.
 
-**If not specified** → render the **Datatable Builder artifact**:
+**Nếu chưa chỉ định** → hỏi tuần tự 3 câu (chờ user trả lời xong mỗi câu mới hỏi câu tiếp):
+
+**Câu 1 — Banner:**
+Đọc `metadata.json`, liệt kê các câu SA/MA (thường là câu demographics):
+```
+Banner gồm những câu nào? (Total luôn có sẵn)
+Ví dụ: S3 (Gender), S5 (Age), S7 (Income)
+Nhập số câu cách nhau bằng dấu phẩy:
+```
+→ Lấy choice codes từ `metadata.json` để tạo `groups`.
+
+**Câu 2 — Stub:**
+Liệt kê tất cả câu SA/MA/Matrix từ `metadata.json`:
+```
+Stub gồm những câu nào?
+- Nhập "all" để lấy tất cả
+- Hoặc nhập số câu: Q1, Q5, Q8...
+```
+→ Câu SA **hoặc Matrix_SA** có `scale_class: "Ordinal"` trong `metadata.json` → xem **Step 3d**
+  để tự động thêm `"mean"` + **factor** (bắt buộc, mọi choice) + group T2B/B2B trong `choices`
+  cho thang 1-5, `"nps"` cho thang 1-10/0-10 — không cần user yêu cầu riêng. Câu Nominal hoặc
+  chưa có `scale_class` thì giữ mặc định `["base", "percent"]`.
+→ Câu `NUM` → LUÔN tự động thêm `"mean"` + `"num_quantile": 4`, không cần hỏi.
+→ Câu `multiplenumber` → LUÔN tự động thêm `"mean"`, không cần hỏi.
+
+**Câu 3 — Title:**
+```
+Tiêu đề bảng? (Enter để dùng mặc định: "SURVEY_NAME - Data Table")
+```
+
+Tạo `output/SURVEY_NAME/datatable/datatable.json` với **default tables: Count + Pct** (không có Sig — xem Tables rules).
+
+**Helper scripts** (dùng khi cần tra cứu choice codes; đường dẫn tương đối `.skill_work/fieldcheck-dp/scripts/`):
+```bash
+python .skill_work/fieldcheck-dp/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type banner
+python .skill_work/fieldcheck-dp/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type stub
+python .skill_work/fieldcheck-dp/scripts/check_choices.py  output/SURVEY_NAME/data/metadata.json --question Q10
+python .skill_work/fieldcheck-dp/scripts/group_numeric.py  output/SURVEY_NAME/data/rawdata.csv output/SURVEY_NAME/data/metadata.json --question S3_1
+```
+`group_numeric.py` (câu NUM): đề xuất range/bucket tự động từ phân bố giá trị thật (bin width
+"đẹp" — 1/2/5/10/20/25/50/100 × 10^n), in sẵn `"choices"` (group + hidden) để paste vào stub.
+Dùng `--width N` để ép width cụ thể thay vì để script tự chọn, `--bins N` để đổi số bin mục tiêu.
+
+---
+
+### Step 4b — Language check
+
+Trước khi chạy pipeline, kiểm tra metadata.json xem survey có mấy ngôn ngữ:
 
 ```python
-# Read the HTML builder from skill assets
-with open("skills/surveyflow/datatable_builder.html", encoding="utf-8") as f:
-    html_content = f.read()
-# Render as artifact in chat
+import json
+with open('output/SURVEY_NAME/data/metadata.json') as f:
+    meta = json.load(f)
+# metadata.json KHÔNG có key "languages" — suy ra từ keys của question_i18n
+langs = sorted({k for q in meta['questions'].values() for k in q.get('question_i18n', {})})
+print('Languages:', langs)
 ```
 
-The builder is a **multi-step web UI** that runs in the artifact panel:
-
-```
-Step 1: Cài đặt  → Tiêu đề bảng + Loại output (Pct/Count/Sig)
-Step 2: Banner   → Chọn câu SA/MA làm cột header
-Step 3: Stub     → Chọn câu SA/MA/Matrix làm hàng
-Step 4: Xác nhận → Review + nút "Tạo datatable.json"
-```
-
-**User flow:**
-1. User mở builder → kéo/thả `output/SURVEY_NAME/data/metadata.json` vào ô upload
-2. Chọn cài đặt → banner → stub → xác nhận
-3. Nhấn **"Tạo datatable.json"** → JSON hiện ra trong trang với nút Sao chép
-4. User sao chép và paste vào chat — Claude nhận được message dạng:
-
-```
-[DATATABLE_CONFIG]
-{ ... json ... }
-```
-
-**Khi Claude nhận `[DATATABLE_CONFIG]`:**
-1. Parse JSON từ message
-2. Save to `output/SURVEY_NAME/datatable/datatable.json`
-3. Confirm with user: *"Đã lưu datatable.json. Chạy v1 nhé?"*
-4. Run pipeline (Step 5)
-
-> ⚠️ Builder chỉ tạo cấu hình cơ bản (banner groups, stub list, output type).
-> Các tính năng nâng cao (show_total, banner_matrix, row_group, custom_ref, sub-question ref)
-> được thêm sau thông qua Workflow B.
-
-**Helper scripts** (Claude dùng internally để tra cứu choice codes khi cần):
-```bash
-python skills/surveyflow/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type banner
-python skills/surveyflow/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type stub
-python skills/surveyflow/scripts/check_choices.py  output/SURVEY_NAME/data/metadata.json --question Q10
-```
+- **1 ngôn ngữ** → dùng luôn, không hỏi user (ví dụ: `--lang vi`)
+- **Nhiều ngôn ngữ** → hỏi:
+  > *"Survey có {langs}. Bạn muốn output ngôn ngữ nào?"*
+  → User chọn → dùng `--lang {choice}` khi chạy Step 5
 
 ---
 
@@ -361,13 +440,8 @@ python skills/surveyflow/scripts/check_choices.py  output/SURVEY_NAME/data/metad
 ```bash
 python run_pipeline.py \
   --output-dir output/SURVEY_NAME \
-  --version    v1
-```
-
-With language:
-```bash
-python run_pipeline.py --output-dir output/SURVEY_NAME --version v1 --lang en   # English
-python run_pipeline.py --output-dir output/SURVEY_NAME --version v1 --lang vi   # Vietnamese (default)
+  --version    v1 \
+  --lang       vi
 ```
 
 Force re-ingestion after new fetch:
@@ -377,126 +451,96 @@ python run_pipeline.py \
   --export-csv      output/SURVEY_NAME/mcp/data_export.csv \
   --output-dir      output/SURVEY_NAME \
   --version         vX \
+  --lang            vi \
   --force-ingestion
 ```
 
-> ⚠️ NEVER recreate or rewrite `run_pipeline.py` — it is always available in the project root.
+> ⚠️ NEVER recreate or rewrite `run_pipeline.py`.
 
-#### After pipeline — always present result
-
+After pipeline:
 ```
 ✅ Datatable xong!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📁 File   : output/SURVEY_NAME/v1/datatable.xlsx
-📊 Sheets : General - Pct  |  General - Count  |  General - Sig
-👥 Rows   : 450 respondents
+📊 Sheets : General - Count  |  General - Pct
+👥 Rows   : {N} respondents
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Bạn muốn thay đổi gì không? (thêm banner, thêm câu, đổi ngôn ngữ, tạo PPTX appendix...)
+Bạn muốn thay đổi gì không? (thêm banner, thêm câu, bật sig test, tạo PPTX...)
 ```
 
 ---
 
 ### Step 6 — PPTX Chart Appendix (tuỳ chọn)
 
-Sau khi pipeline chạy xong, `chart_data.json` đã có sẵn cạnh `datatable.xlsx`.
-Khi user nói *"tạo appendix"*, *"chạy slides"*, *"tạo PPTX"* → xác nhận rồi chạy.
+Khi user nói *"tạo appendix / chạy slides / tạo PPTX"* → confirm rồi chạy.
 
-**Cách 1 — kèm pipeline** (table + appendix trong 1 lệnh):
+**Chọn table** — appendix chỉ render đúng 1 table (không gộp tất cả), theo `sub_title`:
+`"Appendix"` → nếu không có `"General"` → nếu không có cả 2, **không chạy**, hỏi user tạo
+table với `sub_title: "Appendix"` trong `datatable.json`.
+
 ```bash
-python run_pipeline.py \
-  --output-dir output/SURVEY_NAME \
-  --version    vX \
-  --appendix
+# Kèm pipeline:
+python run_pipeline.py --output-dir output/SURVEY_NAME --version vX --lang vi --appendix
+
+# Riêng (sau khi đã có chart_data.json):
+surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx
 ```
 
-**Cách 2 — riêng** (sau khi đã có chart_data.json):
-```bash
-surveyflow-pptx \
-  output/SURVEY_NAME/vX/chart_data.json \
-  output/SURVEY_NAME/vX/slides.pptx
-```
+Options: `--table N` (ghi đè bằng table_index cụ thể, bỏ qua auto-select) · `--start-page N`
+(số trang bắt đầu) · `--format general|default` (ghi đè `appendix_format` 1 lần, không lưu) ·
+`--logo acecook|none|path/to/logo.png` (ghi đè `appendix_logo` 1 lần, chỉ với `--format default`) ·
+`--default-section-label "08 | PHỤ LỤC"` (ghi đè tag góc trên-trái)
 
-Tuỳ chọn `surveyflow-pptx`:
-- `--table N` — chỉ chạy bảng thứ N (0-indexed)
-- `--start-page N` — bắt đầu đánh số trang từ N
+**Format** — mặc định luôn dùng `"default"` (style công ty), **không cần hỏi**. Chỉ khi user yêu cầu
+rõ style thuần surveyflow (không branding) → ghi `"appendix_format": "general"` vào table item trong
+`datatable.json`. `"default"`: slide layout + placeholder title/footer/số trang riêng của template
+công ty, font Segoe UI, bảng màu riêng (5 màu thật của brand + 15 sắc tint/shade suy ra, tổng 20 màu
+— tránh trùng màu khi câu có >5 lựa chọn), chỉ 2 layout (donut+stack cho Ordinal; 3-cột bar ngang
+dùng chung cho MA và SA-Nominal nhiều lựa chọn — chưa có style cột dọc riêng). Tag góc trên-trái tự
+đổi theo `--lang` của lần chạy table gần nhất: "PHỤ LỤC" (vi) / "APPENDIX" (en) — không cần cấu hình.
+Asset: `surveyflow/steps/appendix/appendix_templates/default_template.pptx` (đã xoá slide mẫu, không
+dùng lại để re-extract) + `chart_templates_default/{bar,donut,stacked}.xml`.
 
-> ⚠️ Self-contained — không cần `documents/temp.pptx`. Style từ `surveyflow/steps/appendix/chart_templates/`.  
-> ⚠️ **NEVER recreate or rewrite `surveyflow/steps/appendix/generate_pptx.py`** — nằm sẵn trong package.
+**Logo khách hàng** (chỉ format `"default"`) — hỏi **một lần** nếu table chưa có `appendix_logo`:
+> *"Logo khách hàng trong appendix? 1. Acecook (có sẵn) · 2. Khách khác (cần file ảnh) · 3. Không dùng (chỉ Q&Me)"*
+→ 1 = bỏ qua field (mặc định `"acecook"`) · 2 = hỏi đường dẫn ảnh → ghi vào `"appendix_logo"` ·
+3 = `"appendix_logo": "none"`. Logo Q&Me (trái) **không bao giờ** đổi; chọn `"none"` cũng xoá dấu gạch
+dọc "|" giữa 2 logo (shape `QMeLogo`/`CustomerLogo`/`LogoDivider` trong slide master). Cả
+`appendix_format` lẫn `appendix_logo` tự chảy qua `chart_data.json` → hỏi 1 lần, các lần chạy sau tự
+dùng lại, KHÔNG hỏi lại.
 
-After running:
-```
-✅ PPTX xong!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📁 File : output/SURVEY_NAME/vX/slides.pptx
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+**Tiêu đề slide tuỳ chỉnh** — stub entry có thể thêm field `"title"` (mặc định `null`). Thứ tự
+fallback khi tạo `chart_data.json`: `"title"` của stub (nếu set) → `title_i18n[lang]` của câu đó
+trong `metadata.json` (Step 3a, tự động, không cần làm gì thêm) → label gốc rút gọn (nếu cả 2 đều
+null). Chỉ cần **ghi đè thủ công** field `"title"` khi muốn 1 tiêu đề KHÁC với `title_i18n` đã có
+sẵn (VD label dài/khó đọc mà bản tóm tắt Step 3a chưa ưng ý) — đề xuất bản tóm tắt ngắn (5-10 từ)
+→ user xác nhận → ghi vào `"title"` (KHÔNG tự ghi mà không hỏi, khác các auto-rule khác — tóm tắt
+ngôn ngữ tự nhiên là chủ quan). Footer/Q-label cuối slide vẫn luôn hiện label gốc đầy đủ, `title`
+chỉ thay tiêu đề lớn. Matrix/ranking: 1 `title` trên stub cha áp dụng cho mọi slide row/rank sinh
+ra; row_group: set theo từng `items[i]`.
 
----
+`NUM`/`multiplenumber` → luôn render donut+stack như SA-Ordinal. NUM: mỗi bin `num_quantile`/range
+group = 1 slice, giữ thứ tự bin, donut hole hiện "Mean: X". multiplenumber: % slice tính từ mean
+per category đã normalize (không phải % respondents), không hiện "Mean: X" (không có mean tổng).
 
-## Workflow D — PPTX Chart Appendix (standalone)
-
-Khi user muốn tạo PPTX từ kết quả đã có (không phải trong Workflow A):
-
-**Confirm trước khi chạy:**
-> *"Tôi sẽ tạo PPTX appendix từ `output/SURVEY_NAME/vX/chart_data.json`. Bạn xác nhận không?"*
-
-**Cách 1 — chạy lại pipeline kèm appendix:**
-```bash
-python run_pipeline.py \
-  --output-dir output/SURVEY_NAME \
-  --version    vX \
-  --appendix
-```
-
-**Cách 2 — chạy riêng từ chart_data.json đã có:**
-```bash
-surveyflow-pptx \
-  output/SURVEY_NAME/vX/chart_data.json \
-  output/SURVEY_NAME/vX/slides.pptx
-```
-
-**Chart type tự chọn:**
-- `donut_stacked` → donut Total + 100%-stacked breakdown (SA ≤ 5 choices)
-- `bar_vertical` → cột dọc Total + cột breakdown (SA > 5 choices)
-- `bar_horizontal` → bar ngang Total + cột breakdown (MA)
-
-> ⚠️ Self-contained — không cần `documents/temp.pptx`.  
-> Style: `surveyflow/steps/appendix/chart_templates/{bar,col,donut,stacked}.xml`  
-> ⚠️ **NEVER recreate or rewrite `surveyflow/steps/appendix/generate_pptx.py` hoặc `tools/extract_chart_templates.py`**  
-> CLI command sau `pip install surveyflow`: `surveyflow-pptx`
+> ⚠️ **NEVER recreate or rewrite `surveyflow/steps/appendix/generate_pptx.py`**
 
 ---
 
 ## Workflow B — User requests changes
 
-When user asks to modify the table:
+1. Read `output/SURVEY_NAME/datatable/datatable.json`
+2. Confirm change: *"Tôi sẽ [mô tả]. OK không?"*
+3. Modify + save `datatable.json`
+4. Detect next version: check existing `vX/` folders → increment
+5. Run pipeline (table-only, no `--mcp-dir`) + same `--lang` as before
+6. Present result
 
-1. **Read** current `output/SURVEY_NAME/datatable/datatable.json`
-2. **Understand** the request (see Common requests table below)
-3. **Confirm** change before modifying: *"Tôi sẽ [mô tả thay đổi]. OK không?"*
-4. **Modify and save** `datatable.json`
-5. **Detect current version**: check which `vX/` folders exist → use next number
-6. **Run pipeline** with new version (table-only, no `--mcp-dir` needed)
-7. **Present result** using same template as Step 5
-
-**After each change:**
-> *"Đã cập nhật v2. File cũ v1 vẫn còn. Bạn muốn thay đổi thêm gì không?"*
-
-**Version rules:**
-- v1 = first table
-- Increment (v1→v2→v3...) every time datatable.json changes and pipeline re-runs
-- NEVER overwrite existing vX folder — always create new one
-- Always tell user: *"Tôi sẽ tạo v2 — file v1 vẫn giữ nguyên"*
+> *"Đã cập nhật v2. File cũ v1 vẫn còn."* — NEVER overwrite existing vX.
 
 ---
 
 ## datatable.json structure
-
-`datatable.json` is an **array** — each item produces its own set of sheets.
-
-**Item types:**
-- `{ "type": "datatable", ... }` → cross-tab table (or omit `type`, default = datatable)
-- `{ "_custom_defs": [...] }` → reusable filter definitions (no sheet output)
 
 ```json
 [
@@ -507,205 +551,94 @@ When user asks to modify the table:
     "banner": [
       { "label": "Total", "filter": null },
       {
-        "label": "Gender",
-        "question": "Q10",
+        "label": "Gender", "question": "S3",
         "groups": [
-          { "label": "Male",   "value": 2 },
-          { "label": "Female", "value": 1 }
+          { "label": "Male",   "value": 1 },
+          { "label": "Female", "value": 2 }
         ]
       }
     ],
     "stub": [
-      { "question": "Q10", "label": "Gender",    "stats": ["base", "percent"] },
-      { "question": "Q36", "label": "Food Freq", "stats": ["base", "percent", "t2b", "b2b", "mean"] }
+      { "question": "S3",  "label": null, "stats": ["base", "percent"] },
+      { "question": "Q36", "label": null, "stats": ["base", "percent", "mean"] }
     ],
     "tables": [
       { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
-      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 },
-      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "levels": [90, 95], "method": "independent", "enabled": true }
+      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 }
     ]
   }
 ]
 ```
 
-Sheet tab = `{sub_title} - {sheet}` → e.g. `"General - Count"`.
+Sheet tab = `{sub_title} - {sheet}` → e.g. `"General - Count"`, `"General - Pct"`.
 
 ---
 
 ## Banner rules
 
 - Always include `{ "label": "Total", "filter": null }` as first entry
-- `value` = single integer code; `values` = list of codes (for grouping)
-- Use the question **label** (e.g. `"Q10"`) as the `question` field — from `metadata.json`
+- `value` = single code; `values` = list of codes (grouping)
+- `question` field = question label from `metadata.json` (e.g. `"S3"`)
 - MA questions supported as banner
-- To find choice codes → read `metadata.json` → find question → `choices_i18n`
+- `show_total: true` trên banner entry → thêm cột Total riêng cho group đó
 
-### show_total — add Total before sub-groups
-
-```json
-{
-  "label": "Area", "question": "S3a",
-  "groups": [{ "label": "HN", "value": 1 }, { "label": "HCM", "value": 2 }],
-  "show_total": true
-}
-```
-
-If **any** entry has `show_total: true`, the global Total column is hidden.
-
-### _custom_defs + custom_ref — reusable filter groups
-
-Define once:
-```json
-{
-  "_custom_defs": [
-    {
-      "label": "Users",
-      "choices": [
-        { "code": 1, "label": "Brand A", "filter": { "question": "S11b", "codes": [1, 2] } },
-        { "code": 2, "label": "Brand B", "filter": { "and": [
-            { "question": "S11b", "codes": [3, 4] },
-            { "question": "S4",   "codes": [2, 3] }
-        ]}}
-      ]
-    }
-  ]
-}
-```
-
-Reference in `banner`: `{ "type": "custom_ref", "ref": "Users", "label": "Users" }`
-
-Nested (Gender × Users):
-```json
-{
-  "label": "Gender", "question": "S5",
-  "groups": [{ "label": "Nam", "value": 1 }, { "label": "Nữ", "value": 2 }],
-  "levels": [{ "type": "custom_ref", "ref": "Users", "label": "Users" }]
-}
-```
-
-**Filter syntax:** `{ "question": "Qx", "codes": [...] }` / `{ "and": [...] }` / `{ "or": [...] }`
-
-### custom_ref in stub
-
-```json
-{ "type": "custom_ref", "ref": "Users", "stats": ["base", "percent"] }
-```
-
-### banner_matrix — Matrix rows as nested columns
-
-```json
-"banner_matrix": { "label": "Brand", "question": "Q17" }
-```
-
-With groups (`row_code`/`row_codes` accept integers or strings):
-```json
-"banner_matrix": {
-  "label": "Brand", "question": "Q17",
-  "groups": [
-    { "label": "International", "row_codes": [1, 2, 3] },
-    { "label": "Castrol",       "row_code":  1 },
-    { "label": "Shell",         "row_code":  2 }
-  ]
-}
-```
-
-### matrix_orientation — Matrix rows as banner sub-columns
-
-Khi toàn bộ stub là matrix questions có cùng rows:
-
-```json
-{
-  "matrix_orientation": "horizontal",
-  "stub": [
-    { "question": "Q17", "label": "Brand Satisfaction", "stats": ["base", "percent"] },
-    { "question": "Q19", "label": "Brand Imagery",      "stats": ["base", "percent"] }
-  ]
-}
-```
-
-Rows → banner sub-columns (Total/Brand A, Total/Brand B...), Choices → stub rows.
-
-### matrix_rows — show/hide/combine brand sub-columns
-
-Dùng cùng `matrix_orientation: "horizontal"` để chọn brands hiện:
-
-```json
-"matrix_rows": [
-  { "row_code": 1,             "label": "STING" },
-  { "row_code": 2,             "label": "RED BULL" },
-  { "row_codes": [4,5,6,7],   "label": "Others" }
-]
-```
-
-Rows không liệt kê → tự động ẩn. Bỏ qua `matrix_rows` → hiện tất cả.
-
-### sig_direction
-
-```json
-"sig_direction": "rows"
-```
-
-- `"rows"` (default): so sánh brands với nhau trong cùng demographic
-- `"columns"`: so sánh demographics với nhau trong cùng brand
+Advanced: `_custom_defs` + `custom_ref`, `banner_matrix`, `levels` — thêm khi user yêu cầu.
 
 ---
 
 ## Stub rules
 
-- `stats`: `"base"`, `"percent"`, `"t2b"`, `"b2b"`, `"mean"`, `"std"`, `"se"`
-- Types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`
-- Auto-excluded: `FT`, `NUM`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
-- Output order follows `stub` array order
+- **`"label"` — LUÔN `null` khi Claude tự thêm câu vào stub, KHÔNG tự viết/rút gọn nội dung vào
+  field này** (khác `"title"` — được phép tự đề xuất tóm tắt). `null` → fallback sang
+  `question_i18n` đầy đủ trong `metadata.json`, dùng cho header bảng xlsx + footer/Q-label slide
+  (cần giữ nguyên văn để tra soát). Chỉ ghi khi **user tự tay** cho giá trị cụ thể.
+- `stats`: `"base"`, `"percent"`, `"nps"`, `"mean"`, `"std"`, `"se"` — **không còn `"t2b"`/`"b2b"`**,
+  2 stat này đã bỏ, thay bằng group entry `{"label":"T2B"/"B2B","codes":[..],"type":"combine"}`
+  trong `choices` (tự render cùng `"percent"`, xem Step 3d mục 2)
+- `"title"` (mặc định `null`) trên mỗi stub entry — tiêu đề slide appendix tuỳ chỉnh; nếu để
+  `null`, `chart_data.json` tự fallback sang `title_i18n` của câu đó trong `metadata.json` (Step 3a)
+- Types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
+- SA với `scale_class: "Ordinal"` (metadata.json, xem Step 3c/3d) → tự động thêm
+  `"mean"`/group T2B-B2B/`"nps"` tuỳ range thang đo
+- `NUM` (câu số đơn): `"percent"` tự sinh 1 row/giá trị số, sort giảm dần (lớn→nhỏ). **Mặc định LUÔN
+  áp dụng khi thêm câu NUM vào stub** — không cần hỏi/xác nhận trước: thêm `"mean"` vào `stats` +
+  thêm `"num_quantile": 4` (pipeline tự tính 4 bin ~bằng số respondent, live mỗi lần chạy table).
+  - Đổi số nhóm → sửa `num_quantile`. Muốn range cố định (VD thập kỷ tuổi) thay vì chia đều
+    respondent → bỏ `num_quantile`, dùng `"choices"` tĩnh (group+hidden, preview bằng
+    `scripts/group_numeric.py ... --width N`). `"choices"` luôn override `num_quantile` nếu có cả 2.
+  - Không group gì → bỏ cả `"choices"` lẫn `num_quantile`.
+- `multiplenumber` (số theo nhiều category, VD phân bổ chi tiêu): mỗi choice có cột số riêng —
+  `"percent"` = % nhập giá trị cho category đó, `"mean"/"std"/...` tính trên giá trị của riêng category
+- Auto-excluded: `FT`, `instruction`, `user-name`, `user-phone`, `reward`, `record`
+- Order follows `stub` array
 
-### row_group — Matrix questions with shared row headers
+Advanced: `row_group`, sub-question ref (`Q17_r10`), `matrix_orientation: "horizontal"` — thêm khi user yêu cầu.
 
+**`ranking`** (PVV xếp hạng N items) → mặc định tách thành 2 stub entries (tránh 1 slide/vị trí xếp hạng ở appendix):
 ```json
-{
-  "row_group": true,
-  "items": [
-    { "question": "Q13_1", "label": "Motorbike oil", "stats": ["base"] },
-    { "question": "Q17",   "label": "Satisfaction",  "stats": ["base", "percent"] }
-  ]
-}
+{ "question": "Q27_2", "stats": ["base","percent"], "ranking_mode": "rank_dist", "ranking_top_n": 3 },
+{ "question": "Q27_2", "stats": ["base","percent"], "ranking_mode": "any_rank" }
 ```
-
-All items must be matrix questions with identical `choices_i18n.rows`.
-
-### Sub-question reference
-
-```json
-{ "question": "Q17_r10", "label": "SK ZIC — satisfaction", "stats": ["base", "percent"] }
-```
+Top 3 = Rank 1/2/3 riêng (donut, mutually exclusive). Overall (`any_rank`) = % ranked ở bất kỳ vị trí nào (không cộng 100%) → appendix tự render như MA/bar chart.
 
 ---
 
 ## Tables rules
 
-- `enabled: false` → sheet is skipped
-- `decimal`: `0` → "0%" (default), `1` → "0.0%", `2` → "0.00%"
-- Sig test config **per sheet** (top-level `significance_test` block is ignored):
-  - `show_sig: true` + `levels` (default `[90, 95]`) + `method` (default `"independent"`)
-
-**Mapping:**
-```
-Count only → [{ sheet: Count, count,      no_sig }]
-Pct only   → [{ sheet: Pct,   percentage, no_sig, decimal: 0 }]
-Sig        → [{ sheet: Sig,   percentage, show_sig: true, levels:[90,95], method: independent }]
-All        → Count + Pct + Sig
+**Default (lần đầu):** chỉ Count + Pct:
+```json
+"tables": [
+  { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
+  { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 }
+]
 ```
 
----
-
-## Language selection (`--lang`)
-
-Controls question and choice labels in output xlsx. Pass at runtime (not stored in datatable.json):
-
-```bash
-python run_pipeline.py --output-dir output/VN8966 --version v1 --lang en   # English
-python run_pipeline.py --output-dir output/VN8966 --version v1 --lang vi   # Vietnamese (default)
+**Sig test** — chỉ thêm khi user yêu cầu ("bật sig", "thêm sig test", "chạy sig"):
+```json
+{ "sheet": "Sig", "cell_content": "percentage", "show_sig": true, "levels": [90, 95], "method": "independent", "enabled": true }
 ```
 
-> 💡 Nếu user muốn output tiếng Anh → nhớ thêm `--lang en` khi chạy Step 5 hoặc Workflow B.
+`decimal`: `0` → "0%" · `1` → "0.0%" · `enabled: false` → skip sheet
 
 ---
 
@@ -713,364 +646,214 @@ python run_pipeline.py --output-dir output/VN8966 --version v1 --lang vi   # Vie
 
 | User says | Claude does |
 |---|---|
-| "thêm income vào banner" | Add question to `banner` array |
+| "thêm income vào banner" | Add question to `banner` |
 | "bỏ Q15 khỏi stub" | Remove Q15 from `stub` |
-| "thêm mean std cho Q36" | Add `"mean"`, `"std"` to Q36's `stats` |
+| "thêm mean std cho Q36" | Add `"mean"`, `"std"` to Q36's stats |
 | "thêm tất cả câu vào stub" | Add all codeable questions |
-| "tắt sig test" | Set `"show_sig": false` on Sig sheet |
-| "bật sig test 90% và 95%" | Add `"show_sig": true, "levels": [90, 95]` to Sig sheet |
+| "bật sig test" | Add Sig sheet to `tables` |
+| "tắt sig test" | Set `"enabled": false` on Sig sheet |
 | "hiện 1 chữ số thập phân" | Add `"decimal": 1` to Pct sheet |
-| "thêm total cho từng banner group" | Add `"show_total": true` to banner entry |
-| "chỉ chạy 1 sheet percentage" | Keep only Pct sheet in `tables` |
+| "thêm total cho banner group" | Add `"show_total": true` to banner entry |
 | "nhóm Q13/Q14/Q17 theo brand" | Use `row_group: true` |
-| "thêm SK ZIC riêng cho Q17" | Add `Q17_r{n}` sub-question ref |
-| "tạo filter group dùng chung" | Create `_custom_defs` item |
-| "thêm user groups vào banner" | Add `{ "type": "custom_ref", "ref": "Name" }` |
-| "user groups × area nested" | Use `levels: [{ "type": "custom_ref", ... }]` |
-| "brand làm header, tất cả brands" | Add `banner_matrix: { question: "QX" }` |
-| "brand header, Castrol riêng, nhóm International" | Add `banner_matrix` with `groups` |
-| "2 bảng: bình thường + matrix brand" | Two items in array |
-| "chạy bảng matrix horizontal" | Add `"matrix_orientation": "horizontal"`; stub chỉ matrix questions cùng rows |
-| "chỉ hiện 4 brands, nhóm others" | Add `matrix_rows` với `row_code` riêng + `row_codes` nhóm |
-| "ẩn brand X" | Xoá row_code đó khỏi `matrix_rows` |
+| "brand làm header" | Add `banner_matrix: { question: "QX" }` |
+| "bảng matrix horizontal" | Add `"matrix_orientation": "horizontal"` |
 | "refresh data / lấy data mới" | Re-fetch → re-run with `--force-ingestion` |
-| "tạo appendix PPTX / chạy slides" | Workflow D: `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
-| "chạy quality check" | Run `--run-quality`, present summary |
-| "xem chi tiết câu Q5" | Filter violations by question, show table |
-| "profile nào bị lỗi nhiều nhất" | Group by profile_id, show top 10 |
-| "export tiếng Anh" | Run with `--lang en` |
+| "tạo PPTX / appendix" | Step 6: chọn table; format tự dùng `"default"` (không hỏi); nếu chưa có `appendix_logo` hỏi logo Acecook/khác/none trước; `surveyflow-pptx ...` |
+| "appendix format general / bỏ branding" | Ghi `"appendix_format": "general"` vào table item trong `datatable.json` |
+| "dùng logo khách khác / không logo Q&Me" | Ghi đường dẫn ảnh vào `"appendix_logo"`, hoặc `"none"` (chỉ Q&Me), hoặc bỏ field = Acecook mặc định |
+| "rút gọn tiêu đề slide / label dài quá" | Đề xuất tóm tắt ngắn → user xác nhận → ghi vào `"title"` của stub entry |
+| "chạy quality check" | Step 3b: `--run-quality`, present summary |
+| "sao title_i18n toàn null" | Bình thường nếu chạy pipeline thẳng không qua Claude — chỉ Claude mới điền được (Step 3a) |
+| "tóm tắt lại title_i18n" | Step 3a: đọc `question_i18n`, ghi đè `title_i18n` cho từng câu (+ sub_questions matrix) |
+| "export tiếng Anh" | Re-run with `--lang en` |
 | "include pending profiles" | Add `--profile-status approved,pending` |
+| "đổi sang tiếng Anh" | Re-run pipeline với `--lang en` |
+| "phân loại câu SA Ordinal/Nominal" | Step 3c: đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class`, báo summary |
+| "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó — chỉ Ordinal mới tự thêm `"mean"` |
+| "đổi Q10 thành Nominal/Ordinal" | Sửa `scale_class` của Q10 trong metadata.json, ghi đè file |
+| "sao câu Ordinal này không có T2B/NPS" | Step 3d: kiểm tra range code — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
+| "thang đo bị đảo (không phải tần suất), mean tính sai" | Step 3d: kiểm tra `scale_high_code`, thêm `factor` theo công thức mirror |
+| "câu tần suất sao không tự có mean" | Đúng — cố ý không tự thêm, phải hỏi user trước (xem ngoại lệ Step 3d) |
+| "tự nhập/ignore factor cho câu tần suất" | Nhập → dùng giá trị đó, giữ Ordinal. Ignore → sửa `scale_class` thành `"Nominal"` |
+| "thêm câu ranking / gộp slide ranking" | Tách 2 stub entries: Top 3 (`ranking_mode: "rank_dist", ranking_top_n: 3`) + Overall (`ranking_mode: "any_rank"`) |
 
 ---
 
 ## FT Coding Workflow
 
-Khi user nói: *"code câu FT"*, *"code Q26"*, *"code open-ended"* → chạy workflow này. Không dùng artifact — toàn bộ bằng bash_tool.
+Khi user nói: *"code câu FT / code Q26 / code open-ended"*
 
-> ⚡ **Effort requirement:** Trước khi bắt đầu, **luôn nhắc user chuyển Effort lên Medium trở lên** (Model picker → Effort → Medium/High/Max). FT coding đòi hỏi Claude đọc hàng trăm responses, tạo code frame MECE và viết regex chính xác — Effort thấp (Low/Default) sẽ cho kết quả kém. Chỉ tiếp tục sau khi user xác nhận đã chuyển.
->
-> *"Trước khi code, bạn vui lòng chuyển **Effort lên Medium trở lên** (Model picker → Effort → Medium). Đã chuyển chưa?"*
+> ⚡ **Nhắc user chuyển Effort lên Medium trở lên trước khi bắt đầu.**
+> *"Bạn vui lòng chuyển Effort → Medium (Model picker). Đã chuyển chưa?"*
 
-### Overview
-
-FT (free-text) questions không thể đưa vào datatable trực tiếp. Pipeline gồm 7 bước:
-1. List câu FT, hỏi user chọn câu nào
-2. Đọc valid responses từ rawdata
-3. Tạo code frame + assign codes bằng regex (rule-based, không cần API key)
-4. Add binary columns vào rawdata
-5. Inject câu MA vào metadata.json
-6. Thêm stub vào datatable.json
-7. Chạy bảng (table-only — KHÔNG force-ingestion)
-
----
-
-### Step FT-1 — List câu FT, hỏi user
+### FT-1 — List câu FT
 
 ```python
 import json
-
-with open('output/SURVEY_NAME/data/metadata.json') as f:
+with open('output/SURVEY/data/metadata.json') as f:
     meta = json.load(f)
-
 ft_qs = sorted(
     [(q['label'], q.get('question_i18n', {}).get('vi', ''))
-     for q in meta['questions'].values()
-     if q.get('answer_type') == 'FT'],
-    key=lambda x: x[0]
-)
+     for q in meta['questions'].values() if q.get('answer_type') == 'FT'],
+    key=lambda x: x[0])
 for label, vi in ft_qs:
     print(f"  {label:10} {vi[:60]}")
 ```
+Hỏi: *"Bạn muốn code câu nào?"*
 
-Hiển thị danh sách, hỏi: *"Bạn muốn code câu nào?"*
-
----
-
-### Step FT-2 — Đọc valid responses
+### FT-2 — Đọc responses
 
 ```python
 import json, pandas as pd
-
-Q_LABEL = 'Q26'       # câu cần code — thay theo yêu cầu
-SURVEY  = 'VN8963'    # thay theo survey
-
+Q_LABEL = 'Q26'; SURVEY = 'VN8963'
 df = pd.read_csv(f'output/{SURVEY}/data/rawdata.csv', low_memory=False)
-
-responses_series = df[Q_LABEL].dropna()
-responses_series = responses_series[responses_series.str.strip().str.len() > 2]
-responses_series = responses_series[responses_series.str.lower() != 'test']
-responses = list(responses_series)
-
-# Save for reuse in next steps
-with open(f'/tmp/{Q_LABEL}_responses.json', 'w', encoding='utf-8') as f:
+s = df[Q_LABEL].dropna()
+s = s[s.str.strip().str.len() > 2]
+s = s[s.str.lower() != 'test']
+responses = list(s)
+with open(f'output/{SURVEY}/data/{Q_LABEL}_responses.json', 'w', encoding='utf-8') as f:
     json.dump(responses, f, ensure_ascii=False, indent=2)
-
 print(f"{Q_LABEL}: {len(responses)} valid responses")
-# Print first 30 to read before building code frame
 for i, r in enumerate(responses[:30], 1):
     print(f"  {i:3}. {r[:100]}")
 ```
 
-Claude đọc output rồi tự tạo CODE_FRAME và RULES ở bước tiếp theo.
-
----
-
-### Step FT-3 — Tạo code frame + assign codes + summary
-
-Claude đọc responses từ output FT-2, tự tạo CODE_FRAME (8–15 mã MECE) và RULES (regex tiếng Việt). Chạy toàn bộ trong 1 bash block:
+### FT-3 — Code frame + assign + summary
 
 ```python
 import re, json, pandas as pd
-
-Q_LABEL = 'Q26'
-SURVEY  = 'VN8963'
-
-with open(f'/tmp/{Q_LABEL}_responses.json', encoding='utf-8') as f:
+Q_LABEL = 'Q26'; SURVEY = 'VN8963'
+with open(f'output/{SURVEY}/data/{Q_LABEL}_responses.json', encoding='utf-8') as f:
     responses = json.load(f)
 
-# ── CODE FRAME — Claude tự điền ──────────────────────────────
 CODE_FRAME = [
-    (1,  "Label EN",       "Mô tả tiếng Việt"),
-    (2,  "...",            "..."),
-    # thêm codes tuỳ nội dung câu hỏi
-    (99, "Other/Unclear",  "Khác/không rõ"),
+    (1,  "Label EN",      "Mô tả tiếng Việt"),
+    (99, "Other/Unclear", "Khác/không rõ"),
 ]
-
-# ── RULES — regex tiếng Việt, 1 pattern per code ─────────────
 RULES = [
-    (1,  r'pattern_a|pattern_b'),
-    (2,  r'pattern_c|pattern_d'),
-    # ...
+    (1, r'pattern_a|pattern_b'),
 ]
 
 def assign_codes(text):
     t = text.lower()
-    assigned = [cid for cid, pattern in RULES if re.search(pattern, t)]
+    assigned = [cid for cid, p in RULES if re.search(p, t)]
     return assigned if assigned else [99]
 
 all_codes = [assign_codes(r) for r in responses]
-
-# ── Summary ───────────────────────────────────────────────────
 n = len(responses)
 counts = {}
 for codes in all_codes:
-    for c in codes:
-        counts[c] = counts.get(c, 0) + 1
+    for c in codes: counts[c] = counts.get(c, 0) + 1
 
-print(f"\n📊 FT Coding — {Q_LABEL} (n={n})")
-print("=" * 50)
-for cid, label_en, label_vi in sorted(CODE_FRAME, key=lambda x: -counts.get(x[0], 0)):
+print(f"\n📊 FT Coding — {Q_LABEL} (n={n})\n" + "="*50)
+for cid, en, vi in sorted(CODE_FRAME, key=lambda x: -counts.get(x[0], 0)):
     cnt = counts.get(cid, 0)
-    print(f"  {cid:2}. {label_en:<28} {cnt:3} ({cnt/n*100:4.1f}%)")
+    print(f"  {cid:2}. {en:<28} {cnt:3} ({cnt/n*100:4.1f}%)")
 ```
 
----
+Nếu Other/Unclear > 15% → đề xuất review thêm rules.
 
-### Step FT-4 — Add vào rawdata
-
-Chạy tiếp trong cùng bash block (hoặc block mới — `all_codes` và `CODE_FRAME` phải còn trong scope):
+### FT-4 — Add vào rawdata
 
 ```python
 df = pd.read_csv(f'output/{SURVEY}/data/rawdata.csv', low_memory=False)
-
-# Dùng pd.concat để tránh fragmentation warning
-new_cols = {f'{Q_LABEL}_coded_{cid}': pd.Series(0, index=df.index)
-            for cid, _, _ in CODE_FRAME}
+new_cols = {f'{Q_LABEL}_coded_{cid}': pd.Series(0, index=df.index) for cid, _, _ in CODE_FRAME}
 df = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
-
-# Fill coded rows — map theo index gốc trong rawdata
-q_mask = (df[Q_LABEL].notna()
-          & (df[Q_LABEL].str.strip().str.len() > 2)
-          & (df[Q_LABEL].str.lower() != 'test'))
-q_indices = df[q_mask].index.tolist()
-
-for i, idx in enumerate(q_indices):
+q_mask = (df[Q_LABEL].notna() & (df[Q_LABEL].str.strip().str.len() > 2) & (df[Q_LABEL].str.lower() != 'test'))
+for i, idx in enumerate(df[q_mask].index.tolist()):
     code_set = set(all_codes[i])
     for cid, _, _ in CODE_FRAME:
         df.at[idx, f'{Q_LABEL}_coded_{cid}'] = 1 if cid in code_set else 0
-
 df.to_csv(f'output/{SURVEY}/data/rawdata.csv', index=False)
 print(f"✅ rawdata: {len(df)} rows, {len(df.columns)} cols")
-print(f"   New cols: {[f'{Q_LABEL}_coded_{c[0]}' for c in CODE_FRAME]}")
 ```
 
-> ⚠️ **KHÔNG chạy `--force-ingestion` sau bước này** — sẽ overwrite rawdata từ export CSV gốc và mất toàn bộ cột coded.
+> ⚠️ **KHÔNG chạy `--force-ingestion` sau bước này** — sẽ mất toàn bộ cột coded.
 
----
-
-### Step FT-5 — Inject câu MA vào metadata.json
+### FT-5 — Inject vào metadata.json
 
 ```python
-with open(f'output/{SURVEY}/data/metadata.json') as f:
-    meta = json.load(f)
-
+with open(f'output/{SURVEY}/data/metadata.json') as f: meta = json.load(f)
 qs = meta['questions']
-
-# Tìm position của câu FT gốc
-ft_pos = next((q['position'] for q in qs.values()
-               if q.get('label') == Q_LABEL), 999)
-
-# Key dict phải là string duy nhất không trùng qid thật
+ft_pos = next((q['position'] for q in qs.values() if q.get('label') == Q_LABEL), 999)
 fake_qid = f'coded_{Q_LABEL}'
-
 qs[fake_qid] = {
-    "position":    ft_pos + 0.5,
-    "question_id": 900000 + hash(Q_LABEL) % 10000,
-    "label":       f"{Q_LABEL}_coded",
-    "question_i18n": {
-        "vi": f"{Q_LABEL} - [Nội dung câu] (coded)",
-        "en": f"{Q_LABEL} - [Question text] (coded)"
-    },
-    "answer_type": "MA",
-    "mandatory":   False,
-    "status":      1,
-    "choices_i18n": {
-        str(cid): {"vi": label_vi, "en": label_en}
-        for cid, label_en, label_vi in CODE_FRAME
-    },
-    # CRITICAL: phải khớp chính xác tên cột trong rawdata
+    "position": ft_pos + 0.5, "question_id": 900000 + hash(Q_LABEL) % 10000,
+    "label": f"{Q_LABEL}_coded",
+    "question_i18n": {"vi": f"{Q_LABEL} - [Nội dung] (coded)", "en": f"{Q_LABEL} - [Text] (coded)"},
+    "answer_type": "MA", "mandatory": False, "status": 1,
+    "choices_i18n": {str(cid): {"vi": vi, "en": en} for cid, en, vi in CODE_FRAME},
     "rawdata_columns": [f"{Q_LABEL}_coded_{cid}" for cid, _, _ in CODE_FRAME]
 }
-
 meta['questions'] = qs
 with open(f'output/{SURVEY}/data/metadata.json', 'w', encoding='utf-8') as f:
     json.dump(meta, f, ensure_ascii=False, indent=2)
-
-print(f"✅ metadata: {len(qs)} questions")
-print(f"   rawdata_columns: {qs[fake_qid]['rawdata_columns']}")
+print(f"✅ metadata: rawdata_columns = {qs[fake_qid]['rawdata_columns']}")
 ```
 
-> **Naming rules — phải nhất quán:**
-> - Rawdata columns: `{Q_LABEL}_coded_{choice_id}` — e.g. `Q26_coded_1`, `Q26_coded_99`
-> - `rawdata_columns` trong metadata phải match chính xác tên cột trong rawdata
-> - surveyflow đọc data qua `rawdata_columns` — sai tên → bảng có header nhưng không có số
+> `rawdata_columns` phải khớp chính xác tên cột trong rawdata — sai tên → bảng có header nhưng không có số.
 
----
-
-### Step FT-6 — Thêm stub vào datatable.json
+### FT-6 — Thêm stub
 
 ```python
-with open(f'output/{SURVEY}/datatable/datatable.json') as f:
-    dt = json.load(f)
-
-# Xóa stub cũ nếu đã có (tránh duplicate khi re-run)
-dt[0]['stub'] = [s for s in dt[0]['stub']
-                 if s.get('question') != f'{Q_LABEL}_coded']
-
-dt[0]['stub'].append({
-    "question": f"{Q_LABEL}_coded",
-    "label":    f"{Q_LABEL} - [Question text] (coded)",
-    "stats":    ["base", "percent"]
-})
-
+with open(f'output/{SURVEY}/datatable/datatable.json') as f: dt = json.load(f)
+dt[0]['stub'] = [s for s in dt[0]['stub'] if s.get('question') != f'{Q_LABEL}_coded']
+dt[0]['stub'].append({"question": f"{Q_LABEL}_coded", "label": f"{Q_LABEL} (coded)", "stats": ["base", "percent"]})
 with open(f'output/{SURVEY}/datatable/datatable.json', 'w', encoding='utf-8') as f:
     json.dump(dt, f, ensure_ascii=False, indent=2)
-
-print(f"✅ datatable.json: {len(dt[0]['stub'])} stubs")
 ```
 
----
-
-### Step FT-7 — Chạy bảng (table-only)
+### FT-7 — Chạy bảng
 
 ```python
 from surveyflow.cli import main
 import os, re as _re
-
-# Detect next version
 existing = [d for d in os.listdir(f'output/{SURVEY}') if _re.match(r'^v\d+$', d)]
 next_v = f"v{max([int(d[1:]) for d in existing], default=0) + 1}"
-
-main([
-    '--output-dir',     f'output/{SURVEY}',
-    '--profile-status', 'approved,pending',
-    '--version',        next_v,
-])
-# KHÔNG dùng --mcp-dir, --export-csv, --force-ingestion
+main(['--output-dir', f'output/{SURVEY}', '--profile-status', 'approved,pending', '--version', next_v])
 ```
 
-Present file sau khi xong bằng `present_files`.
-
----
-
-### Fix percentage formatting (nếu cần)
-
-Câu MA được inject vào metadata đôi khi render dưới dạng decimal (0.082) thay vì % (8%) trong sheet Pct. Kiểm tra và fix nếu cần:
-
+**Fix % formatting nếu cần** (nếu thấy `0.082` thay vì `8%` trong sheet Pct):
 ```python
 import openpyxl
-
-xlsx_path = f'output/{SURVEY}/{next_v}/datatable.xlsx'
-wb = openpyxl.load_workbook(xlsx_path)
-
-for sheet_name in wb.sheetnames:
-    if 'Count' in sheet_name:
-        continue
-    ws = wb[sheet_name]
+wb = openpyxl.load_workbook(f'output/{SURVEY}/{next_v}/datatable.xlsx')
+for ws in [wb[s] for s in wb.sheetnames if 'Count' not in s]:
     in_coded = False
     for row in ws.iter_rows():
         for cell in row:
-            if cell.value == f'{Q_LABEL}_CODED'.upper():
-                in_coded = True
+            if cell.value == f'{Q_LABEL}_CODED': in_coded = True
             if in_coded and isinstance(cell.value, float) and 0 < cell.value <= 1.0:
-                cell.value = round(cell.value * 100, 1)
-                cell.number_format = '0'
-
-wb.save(xlsx_path)
-print(f"✅ Percentage fix applied")
+                cell.value = round(cell.value * 100, 1); cell.number_format = '0'
+wb.save(f'output/{SURVEY}/{next_v}/datatable.xlsx')
 ```
 
-Chỉ chạy nếu mở file thấy số dạng `0.082` thay vì `8`.
-
----
-
-### FT coding summary format
-
-Luôn in sau FT-3 và trước FT-4:
-
-```
-📊 FT Coding — Q26 (n=526)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   6. Taste Improvement        110  (20.9%)
-   2. Packaging Redesign       102  (19.4%)
-   1. More Flavor Variety       85  (16.2%)
-   3. More Advertising          70  (13.3%)
-  99. Other/Unclear            103  (19.6%)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-Nếu Other/Unclear > 15% → đề xuất: *"Other/Unclear còn cao ({n}%). Bạn muốn tôi review và thêm rules không?"*
-
----
-
-### Common requests → FT coding actions
+**FT common requests:**
 
 | User says | Claude does |
 |---|---|
-| "code câu FT" | Chạy FT-1, list câu FT, hỏi user chọn |
-| "code Q26" | Chạy FT-2 → FT-7 tự động cho Q26 |
-| "code Q33c Q33d" | Chạy FT-2 → FT-7 lần lượt cho từng câu |
-| "xem code frame" | In CODE_FRAME dạng bảng |
+| "code câu FT" | FT-1: list câu FT, hỏi user chọn |
+| "code Q26" | FT-2 → FT-7 cho Q26 |
 | "sửa code frame" | Update CODE_FRAME + RULES, re-run FT-4 → FT-7 |
-| "review Other/Unclear" | Lấy responses có code 99, in 20 examples, đề xuất rules mới |
-| "add câu FT đã code vào bảng" | Chỉ chạy FT-5 → FT-7 (skip FT-2/3/4 nếu rawdata đã có cols) |
+| "review Other/Unclear" | Lấy responses code 99, in 20 examples, đề xuất rules |
+| "add câu FT đã code vào bảng" | Chỉ FT-5 → FT-7 (skip FT-2/3/4) |
 
 ---
 
 ## Error handling
-, always:
+
+Khi gặp lỗi, luôn:
 1. Đọc traceback, xác định dòng lỗi
 2. Giải thích ngắn gọn bằng tiếng Việt
-3. Đề xuất fix cụ thể — không chỉ báo lỗi rồi dừng
+3. Đề xuất fix cụ thể
 
 | Error | Likely cause | Fix |
 |---|---|---|
 | `FileNotFoundError: rawdata.csv` | Ingestion chưa chạy | Chạy lại Step 3 |
-| `KeyError: 'Q5'` trong pipeline | Question label sai trong datatable.json | Kiểm tra `metadata.json` để lấy label đúng |
+| `KeyError: 'Q5'` | Question label sai trong datatable.json | Kiểm tra `metadata.json` |
 | Output có 0 rows | `profile_status` filter quá hẹp | Thêm `--profile-status approved,pending` |
 | `ModuleNotFoundError: surveyflow` | Package chưa install | `pip install surveyflow` |
 | `PermissionError: datatable.xlsx` | File đang mở trong Excel | Đóng Excel trước khi chạy |
-| `ValueError: No data_export.csv` | Fetch chưa hoàn thành | Fetch lại hoặc dùng upload zip |
+| `ValueError: No data_export.csv` | Fetch chưa hoàn thành | Fetch lại hoặc upload zip |
 | `json.JSONDecodeError` | datatable.json bị lỗi syntax | Đọc và kiểm tra file JSON |
 
 ---
@@ -1080,11 +863,10 @@ Nếu Other/Unclear > 15% → đề xuất: *"Other/Unclear còn cao ({n}%). B�
 | Situation | Action |
 |---|---|
 | User gọi `/fieldcheck-dp run pipeline` | Chạy thẳng — không confirm |
-| Fetch + ingestion | Chạy thẳng — không confirm |
-| User nhấn nút trong artifact builder | Chạy pipeline ngay — không confirm |
-| User yêu cầu sửa `datatable.json` | Confirm 1 lần: *"Tôi sẽ [thay đổi]. OK không?"* |
-| Fetch lại data mới (overwrite file cũ) | Confirm — destructive action |
+| Fetch + ingestion lần đầu | Chạy thẳng — không confirm |
+| User yêu cầu sửa `datatable.json` | Confirm: *"Tôi sẽ [thay đổi]. OK không?"* |
+| Fetch lại data mới (overwrite) | Confirm — destructive action |
 | Increment version | Thông báo: *"Tôi sẽ tạo v2 — v1 vẫn giữ nguyên"* |
 
 - `"yes / ok / xác nhận / làm đi / chạy đi"` → proceed
-- `"no / thôi / đổi lại"` → stop and ask what to change instead
+- `"no / thôi / đổi lại"` → stop, hỏi user muốn đổi gì

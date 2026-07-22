@@ -344,7 +344,7 @@ def export_chart_data(
                          override-then-fallback pattern "label" already uses.
         lang:           Display language used for this run's labels (e.g. "vi"/
                          "en") — embedded in the JSON so generate_pptx.py can
-                         pick a language-appropriate Dzung_team section tag
+                         pick a language-appropriate "default"-format section tag
                          ("PHỤ LỤC" vs "APPENDIX") without a separate CLI flag,
                          and selects which `title_i18n` language to fall back to.
 
@@ -448,7 +448,8 @@ def export_chart_data(
             "table_index":     tr.get("table_index", 0),
             "title":           tr.get("title", ""),
             "sub_title":       tr.get("sub_title", ""),
-            "appendix_format": tr.get("appendix_format", "general"),
+            "appendix_format": tr.get("appendix_format", "default"),
+            "appendix_logo":   tr.get("appendix_logo", "acecook"),
             "questions":       questions_out,
         })
 

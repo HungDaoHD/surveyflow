@@ -859,7 +859,7 @@ Dùng trong table item có `matrix_orientation: "horizontal"`.
   T2B/B2B giờ là group entry trong `choices` (`"type": "combine"`), tự render cùng `"percent"`, xem
   Step 3c mục 2
 - `"title"` (optional, mặc định `null`) — tiêu đề ngắn gọn hiển thị trên đầu slide appendix
-  (General lẫn Dzung_team), thay cho label gốc dài; xem "Tiêu đề slide tuỳ chỉnh" trong Workflow D
+  (General lẫn default), thay cho label gốc dài; xem "Tiêu đề slide tuỳ chỉnh" trong Workflow D
 - Supported answer types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
   - Matrix questions automatically expand into one block per row (sub-question)
   - When `banner_matrix` is active, matrix questions use paired mode instead
@@ -997,22 +997,21 @@ cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) 
 3. Không có cả 2 → **không chạy**, hỏi user tạo table với `sub_title: "Appendix"` trong
    `datatable.json` (không tự đoán bảng khác).
 
-### Chọn format — General hay Dzung_team
+### Format appendix — "default" (mặc định) hay "general"
 
-Trước khi tạo appendix **lần đầu** cho 1 table (table đó chưa có field `appendix_format`
-trong `datatable.json`), hỏi user:
-> "Bạn muốn appendix dùng format nào?
-> 1. General — style chart mặc định của surveyflow
-> 2. Dzung_team — style theo template công ty Dzung_team (donut/bar theo màu + slide layout riêng)"
+Appendix **luôn dùng format `"default"`** (style công ty, xem "Format 'default' khác 'general'
+ở đâu" bên dưới) trừ khi user chỉ định rõ dùng `"general"` (style chart mặc định thuần của
+surveyflow, không có branding) — **không cần hỏi user chọn format nữa**, không như logo bên
+dưới. `"general"` vẫn được giữ nguyên trong code (không xoá), chỉ không còn là lựa chọn mặc định.
 
-Ghi lựa chọn vào **field `appendix_format`** ngay trong table item đó của `datatable.json`
-(mặc định là `"general"` nếu bỏ qua field này — không cần ghi tường minh cho format General):
+Chỉ ghi field **`appendix_format`** vào table item trong `datatable.json` khi user yêu cầu đổi
+khỏi mặc định (VD "chạy appendix format general"):
 
 ```json
 {
   "type": "datatable",
   "sub_title": "Appendix",
-  "appendix_format": "dzung_team",
+  "appendix_format": "general",
   "banner": [...],
   "stub": [...],
   "tables": [...]
@@ -1020,12 +1019,44 @@ Ghi lựa chọn vào **field `appendix_format`** ngay trong table item đó c�
 ```
 
 Field này **tự động chảy qua** `chart_data.json` (table step ghi lại nguyên văn) rồi tới
-`generate()`/`surveyflow-pptx` — nghĩa là chỉ cần hỏi **một lần**; các lần chạy appendix sau
-(`--appendix` hoặc `surveyflow-pptx` riêng) tự dùng lại format đã lưu, không hỏi lại, trừ khi
-user yêu cầu đổi format. Muốn đổi format cho 1 lần chạy mà không sửa `datatable.json` → dùng
-`surveyflow-pptx ... --format general|dzung_team` (ghi đè, không lưu lại).
+`generate()`/`surveyflow-pptx` — bỏ qua field này (hoặc set `"default"`) thì appendix tự dùng
+format mặc định. Muốn đổi format cho 1 lần chạy mà không sửa `datatable.json` → dùng
+`surveyflow-pptx ... --format general|default` (ghi đè, không lưu lại).
 
-**Dzung_team format khác General ở đâu:**
+### Chọn logo khách hàng (chỉ áp dụng cho format "default")
+
+Trước khi tạo appendix **lần đầu** cho 1 table dùng format `"default"` (table đó chưa có field
+`appendix_logo` trong `datatable.json`), hỏi user:
+> "Bạn muốn dùng logo khách hàng nào trong appendix?
+> 1. Acecook (đã có sẵn trong template)
+> 2. Khách hàng khác — bạn cần cung cấp/upload file ảnh logo
+> 3. Không dùng logo khách hàng (chỉ hiện logo Q&Me)"
+
+- Chọn **1** → bỏ qua field `appendix_logo` (hoặc set `"acecook"`) — logo Acecook đã có sẵn
+  trong template, không cần làm gì thêm.
+- Chọn **2** → hỏi user đường dẫn file ảnh logo (PNG/JPG) → ghi **đường dẫn đó** vào
+  `appendix_logo`.
+- Chọn **3** → ghi `"appendix_logo": "none"`.
+
+```json
+{
+  "type": "datatable",
+  "sub_title": "Appendix",
+  "appendix_logo": "output/SURVEY_NAME/assets/customer_logo.png",
+  "banner": [...],
+  "stub": [...],
+  "tables": [...]
+}
+```
+
+Field này cũng **tự động chảy qua** `chart_data.json` rồi tới `generate()`/`surveyflow-pptx` —
+chỉ cần hỏi **một lần**; các lần chạy appendix sau tự dùng lại logo đã lưu, không hỏi lại, trừ
+khi user yêu cầu đổi logo. Muốn đổi logo cho 1 lần chạy mà không sửa `datatable.json` → dùng
+`surveyflow-pptx ... --logo acecook|none|path/to/logo.png` (ghi đè, không lưu lại). Logo
+Q&Me (bên trái) **không bao giờ** bị thay đổi bởi field này — chỉ logo bên phải (khách hàng)
+mới bị swap/xoá.
+
+**Format "default" khác "general" ở đâu:**
 - Dùng slide layout công ty ("use_dz") thay vì slide trắng — background/thanh màu tự có sẵn từ
   template, không cần vẽ thủ công.
 - Title/footer/số trang là **placeholder thật** của template (không phải textbox tự vẽ).
@@ -1033,16 +1064,21 @@ user yêu cầu đổi format. Muốn đổi format cho 1 lần chạy mà khôn
   (`156082/0F9ED5/A6A6A6/843C0C/4EA72E`) + 15 sắc tint/shade suy ra từ 5 màu đó, tổng 20 màu
   (tránh trùng màu khi câu có >5 lựa chọn — bug thực tế đã xảy ra, VD câu 8 lựa chọn).
 - Chỉ có 2 layout: donut+stack (SA Ordinal/thang đo) và 3-cột bar ngang (dùng chung cho MA
-  **và** SA-Nominal nhiều lựa chọn — template Dzung_team chưa có style cột dọc riêng).
+  **và** SA-Nominal nhiều lựa chọn — template chưa có style cột dọc riêng).
+- Logo Q&Me (trái) + logo khách hàng (phải, mặc định Acecook) — xem "Chọn logo khách hàng" ở
+  trên. `"general"` không có logo nào (blank layout).
 - Ô tag góc trên-trái tự đổi theo `--lang` của lần chạy table gần nhất (`lang` được ghi kèm vào
   `chart_data.json`): `"PHỤ LỤC"` nếu `--lang vi`, `"APPENDIX"` nếu `--lang en`. Không cần cấu hình
   gì thêm — chỉ cần chạy table đúng `--lang` mong muốn trước khi tạo appendix. Muốn ghi đè text
-  khác (VD số chương khác "08") → `surveyflow-pptx ... --dz-section-label "08 | PHỤ LỤC"`.
-- Asset nằm ở `surveyflow/steps/appendix/appendix_templates/dzung_team_template.pptx` +
-  `surveyflow/steps/appendix/chart_templates_dzung_team/{bar,donut,stacked}.xml`. Muốn đổi màu/font
-  Dzung_team → sửa file gốc (chưa strip slide) trong PowerPoint → chạy lại
-  `tools/extract_chart_templates_dzung_team.py path/to/your_unstripped_source.pptx` (xem docstring
+  khác (VD số chương khác "08") → `surveyflow-pptx ... --default-section-label "08 | PHỤ LỤC"`.
+- Asset nằm ở `surveyflow/steps/appendix/appendix_templates/default_template.pptx` +
+  `surveyflow/steps/appendix/chart_templates_default/{bar,donut,stacked}.xml`. Muốn đổi màu/font
+  → sửa file gốc (chưa strip slide) trong PowerPoint → chạy lại
+  `tools/extract_chart_templates_default.py path/to/your_unstripped_source.pptx` (xem docstring
   trong file đó — bản bundle trong repo đã bị xoá hết slide mẫu, không dùng lại được để extract).
+  Logo Q&Me/khách hàng là 2 picture cố định trong slide master của `default_template.pptx`, tên
+  shape `QMeLogo`/`CustomerLogo` — đổi logo Q&Me mặc định (hiếm khi cần) phải sửa trực tiếp file
+  này trong PowerPoint, giữ nguyên tên shape `QMeLogo`.
 
 ### Tiêu đề slide tuỳ chỉnh — field "title" trong stub
 
@@ -1079,7 +1115,8 @@ set title riêng theo từng row/rank được. **row_group** (`items: [...]`) �
 item riêng nếu cần khác nhau theo từng câu con.
 
 **Confirm trước khi chạy** (giống chạy pipeline):
-> "Tôi sẽ tạo appendix PPTX (format {General/Dzung_team}) từ chart_data.json. Bạn xác nhận không?"
+> "Tôi sẽ tạo appendix PPTX (format {default/general}, logo {Acecook/khách hàng khác/không dùng})
+> từ chart_data.json. Bạn xác nhận không?"
 
 **Cách 1 — chạy kèm pipeline** (table + appendix trong 1 lệnh):
 ```bash
@@ -1097,8 +1134,10 @@ surveyflow-pptx \
 ```
 
 Tuỳ chọn `surveyflow-pptx`: `--table N` (ghi đè bằng table_index cụ thể, bỏ qua auto-select
-theo `sub_title`), `--start-page N` (số trang bắt đầu), `--format general|dzung_team` (ghi đè
-`appendix_format` của table cho riêng lần chạy này, không lưu lại vào `datatable.json`).
+theo `sub_title`), `--start-page N` (số trang bắt đầu), `--format general|default` (ghi đè
+`appendix_format` của table cho riêng lần chạy này, không lưu lại vào `datatable.json`),
+`--logo acecook|none|path/to/logo.png` (ghi đè `appendix_logo` của table cho riêng lần chạy
+này, chỉ áp dụng với `--format default`, không lưu lại vào `datatable.json`).
 
 **Chart type tự suy ra** từ `chart_data.json`:
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải
@@ -1177,9 +1216,12 @@ output/SURVEY_NAME/
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
-| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; nếu table chưa có `appendix_format` thì hỏi General/Dzung_team trước; `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
-| "appendix theo format Dzung_team / style công ty Dzung_team" | Ghi `"appendix_format": "dzung_team"` vào table item trong `datatable.json` (xem "Chọn format — General hay Dzung_team") rồi chạy appendix bình thường — lưu 1 lần, các lần sau tự dùng lại |
-| "đổi appendix về format general / bỏ Dzung_team" | Xoá field `appendix_format` (hoặc set `"general"`) khỏi table item đó trong `datatable.json` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; format tự dùng `"default"` (không cần hỏi); nếu table chưa có `appendix_logo` thì hỏi user chọn logo Acecook/khách khác/không dùng trước (xem "Chọn logo khách hàng"); `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "appendix theo format general / bỏ style công ty" | Ghi `"appendix_format": "general"` vào table item trong `datatable.json` (xem "Format appendix — default hay general") rồi chạy appendix bình thường — lưu 1 lần, các lần sau tự dùng lại |
+| "đổi appendix về mặc định / bỏ format general" | Xoá field `appendix_format` (hoặc set `"default"`) khỏi table item đó trong `datatable.json` |
+| "dùng logo khách hàng khác cho appendix" | Hỏi user đường dẫn file ảnh logo → ghi đường dẫn đó vào `"appendix_logo"` của table item trong `datatable.json` |
+| "appendix không cần logo khách hàng / chỉ logo Q&Me" | Ghi `"appendix_logo": "none"` vào table item đó |
+| "quay lại logo Acecook mặc định" | Xoá field `appendix_logo` (hoặc set `"acecook"`) khỏi table item đó |
 | "label câu này dài quá, rút gọn tiêu đề slide" | Đề xuất bản tóm tắt ngắn (5-10 từ) → user xác nhận → ghi vào `"title"` của stub entry đó |
 | "bỏ title tuỳ chỉnh, dùng lại label gốc" | Xoá field `"title"` (hoặc set `null`) khỏi stub entry đó |
 | "phân loại câu SA Ordinal/Nominal" | Step 3b: Claude đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class` |

@@ -58,7 +58,7 @@ C_QDESC  = RGBColor(0x40, 0x40, 0x40)  # Q-label description                (#40
 C_QBASE  = RGBColor(0x7F, 0x7F, 0x7F)  # (N=XX) and page number            (#7F7F7F)
 
 
-# ── Appendix format "theme" — general vs Dzung_team ──────────────────────────────
+# ── Appendix format "theme" — general vs default (company-branded) ───────────
 #
 # Two output formats share every geometry/layout FUNCTION in this module
 # (they're written generically in terms of an (l, t, w, h) box + fractions,
@@ -67,7 +67,14 @@ C_QBASE  = RGBColor(0x7F, 0x7F, 0x7F)  # (N=XX) and page number            (#7F7
 # section labels / Mean-NPS text use. Bundling those into one `_Theme` object
 # and threading it through as a single `theme=` kwarg (default GENERAL_THEME)
 # means every existing call site in the "general" render path needed zero
-# changes — only the new Dzung_team call sites pass `theme=DZ_THEME` explicitly.
+# changes — only the new "default"-format call sites pass `theme=DEFAULT_THEME`
+# explicitly.
+#
+# NOTE: this company-branded format was originally called "Dzung_team"; the
+# user/API-facing name is now "default" (also the new default `style`, see
+# generate()) and every internal identifier below (DEFAULT_*, _default_*,
+# default_template.pptx, chart_templates_default/) was renamed to match —
+# "general" is kept fully working but is no longer auto-selected.
 class _Theme:
     __slots__ = ("font_name", "chart_palette", "donut_palette", "text_color",
                  "caption_color", "section_font_size", "section_color")
@@ -209,58 +216,58 @@ def _bh_col_l(i: int) -> Emu:
     return Emu(int(BH_MARGIN_L) + i * (int(BH_COL_W) + int(BH_GAP)))
 
 
-# ── Dzung_team format geometry — exact EMU values from appendix_templates/ ──────
-# dzung_team_template.pptx's 2 demo slides (a company-branded "use_dz" slide
+# ── "default" format geometry — exact EMU values from appendix_templates/ ────
+# default_template.pptx's 2 demo slides (a company-branded "use_dz" slide
 # layout). Only 2 chart archetypes are demonstrated in that template —
 # donut+stack (its slide 1) and a 3-equal-column horizontal-bar layout (its
-# slide 2) — so DZ_CHART_TYPE_MAP below collapses the general format's THIRD
-# archetype (bar_vertical / Layout B, used for large-choice SA-Nominal
-# questions with no scale) onto the same 3-column bar layout as MA's
-# bar_horizontal, rather than inventing an undemonstrated vertical-column
-# Dzung_team style. Title/footer/page-number are real placeholders inherited
-# from the bundled template's slide layout (idx 13/11/10) — see
-# _dz_new_slide — not manually positioned textboxes like the general format.
-DZ_SW = Emu(9144000)   # 10.000"
-DZ_SH = Emu(5143500)   # 5.625"
+# slide 2) — so the general format's THIRD archetype (bar_vertical / Layout B,
+# used for large-choice SA-Nominal questions with no scale) collapses onto
+# the same 3-column bar layout as MA's bar_horizontal below, rather than
+# inventing an undemonstrated vertical-column style for "default". Title/
+# footer/page-number are real placeholders inherited from the bundled
+# template's slide layout (idx 13/11/10) — see _default_new_slide — not
+# manually positioned textboxes like the general format.
+DEFAULT_SW = Emu(9144000)   # 10.000"
+DEFAULT_SH = Emu(5143500)   # 5.625"
 
-DZ_FONT = "Segoe UI"
-DZ_C_BLACK = RGBColor(0x00, 0x00, 0x00)
-DZ_C_GRAY  = RGBColor(0x75, 0x75, 0x75)  # footer text / Mean-NPS caption
+DEFAULT_FONT = "Segoe UI"
+DEFAULT_C_BLACK = RGBColor(0x00, 0x00, 0x00)
+DEFAULT_C_GRAY  = RGBColor(0x75, 0x75, 0x75)  # footer text / Mean-NPS caption
 
 # Section/chapter tag (top-left orange box, idx 12) — language-dependent,
 # NOT derived from any survey data. Default per lang; override for either one
-# via generate(..., dz_section_label=...) / --dz-section-label.
-DZ_SECTION_LABEL_VI = "PHỤ LỤC"
-DZ_SECTION_LABEL_EN = "APPENDIX"
+# via generate(..., default_section_label=...) / --default-section-label.
+DEFAULT_SECTION_LABEL_VI = "PHỤ LỤC"
+DEFAULT_SECTION_LABEL_EN = "APPENDIX"
 
 
-def _dz_default_section_label(lang: str) -> str:
-    return DZ_SECTION_LABEL_EN if (lang or "vi").strip().lower() == "en" else DZ_SECTION_LABEL_VI
+def _default_section_label(lang: str) -> str:
+    return DEFAULT_SECTION_LABEL_EN if (lang or "vi").strip().lower() == "en" else DEFAULT_SECTION_LABEL_VI
 
-# Layout A: donut + 100%-stacked (slide 1 in dzung_team_template.pptx)
-DZ_DT_TOTAL_L, DZ_DT_TOTAL_T = Emu(411480),  Emu(857250)
-DZ_DT_TOTAL_W                  = Emu(3667316)
-DZ_DT_LEFT_L,  DZ_DT_LEFT_T   = Emu(411480),  Emu(1281135)
-DZ_DT_LEFT_W,  DZ_DT_LEFT_H   = Emu(3667316), Emu(3017520)
-DZ_DT_RIGHT_LBL_L, DZ_DT_RIGHT_LBL_T = Emu(4250245), Emu(857250)
-DZ_DT_RIGHT_LBL_W                      = Emu(4482275)
-DZ_DT_RIGHT_L = Emu(4250245)
-DZ_DT_RIGHT_T = Emu(1402461)
-DZ_DT_RIGHT_W = Emu(4482275)
-DZ_DT_RIGHT_H = Emu(3017520)
+# Layout A: donut + 100%-stacked (slide 1 in default_template.pptx)
+DEFAULT_DT_TOTAL_L, DEFAULT_DT_TOTAL_T = Emu(411480),  Emu(857250)
+DEFAULT_DT_TOTAL_W                  = Emu(3667316)
+DEFAULT_DT_LEFT_L,  DEFAULT_DT_LEFT_T   = Emu(411480),  Emu(1281135)
+DEFAULT_DT_LEFT_W,  DEFAULT_DT_LEFT_H   = Emu(3667316), Emu(3017520)
+DEFAULT_DT_RIGHT_LBL_L, DEFAULT_DT_RIGHT_LBL_T = Emu(4250245), Emu(857250)
+DEFAULT_DT_RIGHT_LBL_W                      = Emu(4482275)
+DEFAULT_DT_RIGHT_L = Emu(4250245)
+DEFAULT_DT_RIGHT_T = Emu(1402461)
+DEFAULT_DT_RIGHT_W = Emu(4482275)
+DEFAULT_DT_RIGHT_H = Emu(3017520)
 
-# Layout C: 3 equal-width bar_horizontal columns (slide 2 in dzung_team_template.pptx)
-DZ_BH_GAP      = Emu(137160)
-DZ_BH_MARGIN_L = Emu(342900)
-DZ_BH_COL_W    = Emu(2727960)
-DZ_BH_LBL_T    = Emu(822960)
-DZ_BH_CHART_T  = Emu(1028700)
-DZ_BH_CHART_H  = Emu(3403450)
+# Layout C: 3 equal-width bar_horizontal columns (slide 2 in default_template.pptx)
+DEFAULT_BH_GAP      = Emu(137160)
+DEFAULT_BH_MARGIN_L = Emu(342900)
+DEFAULT_BH_COL_W    = Emu(2727960)
+DEFAULT_BH_LBL_T    = Emu(822960)
+DEFAULT_BH_CHART_T  = Emu(1028700)
+DEFAULT_BH_CHART_H  = Emu(3403450)
 
 
-def _dz_bh_col_l(i: int) -> Emu:
-    """Left x-coordinate of the i-th (0-based) equal-width column in Dzung_team Layout C."""
-    return Emu(int(DZ_BH_MARGIN_L) + i * (int(DZ_BH_COL_W) + int(DZ_BH_GAP)))
+def _default_bh_col_l(i: int) -> Emu:
+    """Left x-coordinate of the i-th (0-based) equal-width column in "default" Layout C."""
+    return Emu(int(DEFAULT_BH_MARGIN_L) + i * (int(DEFAULT_BH_COL_W) + int(DEFAULT_BH_GAP)))
 
 
 # ── Namespaces ────────────────────────────────────────────────────────────────
@@ -300,8 +307,8 @@ DONUT_PALETTE = [
     "938953",  # brown/tan
 ]
 
-# Dzung_team palette — the first 5 colors are the ones actually observed in
-# the bundled dzung_team_template.pptx's own charts (donut dPt fills +
+# "default"-format palette — the first 5 colors are the ones actually observed in
+# the bundled default_template.pptx's own charts (donut dPt fills +
 # breakdown-bar series fills); the other 15 are tints/shades of those same 5
 # (same brand hues at different lightness — not independently sourced),
 # added because a >5-choice donut (e.g. an 8-option MaxDiff-version
@@ -313,9 +320,9 @@ DONUT_PALETTE = [
 # MORE choices than the previous palette size are affected by each tier).
 # Used for BOTH donut and multi-series roles, unlike the general format's
 # separately-curated 12/6-color lists. Re-derive (or replace wholesale) with
-# `tools/extract_chart_templates_dzung_team.py` against an updated template
+# `tools/extract_chart_templates_default.py` against an updated template
 # if real examples with more distinct brand colors become available.
-DZ_PALETTE = [
+DEFAULT_PALETTE = [
     "156082", "0F9ED5", "A6A6A6", "843C0C", "4EA72E",  # brand colors
     "7EA7BA", "7BC9E7", "CECECE", "BB9379", "9DCE8C",  # +45% white tints
     "0F4861", "0B769F", "7C7C7C", "632D09", "3A7D22",  # -25% black shades
@@ -328,11 +335,11 @@ GENERAL_THEME = _Theme(
     text_color=C_NAVY, caption_color=C_QBASE,
     section_font_size=13, section_color=C_NAVY,
 )
-DZ_THEME = _Theme(
-    font_name=DZ_FONT,
-    chart_palette=DZ_PALETTE, donut_palette=DZ_PALETTE,
-    text_color=DZ_C_BLACK, caption_color=DZ_C_GRAY,
-    section_font_size=9.75, section_color=DZ_C_BLACK,
+DEFAULT_THEME = _Theme(
+    font_name=DEFAULT_FONT,
+    chart_palette=DEFAULT_PALETTE, donut_palette=DEFAULT_PALETTE,
+    text_color=DEFAULT_C_BLACK, caption_color=DEFAULT_C_GRAY,
+    section_font_size=9.75, section_color=DEFAULT_C_BLACK,
 )
 
 
@@ -340,7 +347,7 @@ DZ_THEME = _Theme(
 
 def _set_run_font(run, font_name: str = "Arial") -> None:
     """Set font (latin + ea + cs) on a text run — "Arial" for the general
-    format, "Segoe UI" (DZ_FONT) for Dzung_team."""
+    format, "Segoe UI" (DEFAULT_FONT) for "default"."""
     run.font.name = font_name
     rPr = run._r.get_or_add_rPr()
     for tag, pf, cs_val in [(qn("a:ea"), "34", "-122"), (qn("a:cs"), "34", "-120")]:
@@ -416,7 +423,7 @@ def _set_slide_note(slide, text: str) -> None:
     """Write text into the slide's speaker-notes pane ('Click to add notes').
 
     No-op (rather than raising) if the notes slide has no body placeholder to
-    write into — observed on the bundled Dzung_team template, whose notesMaster
+    write into — observed on the bundled "default"-format template, whose notesMaster
     (inherited from a Google Slides export — note the "Google Shape;NNN;p4"
     shape names elsewhere in that template) has no "body" placeholder for
     add_notes_slide() to clone, so notes_text_frame is None. Speaker notes
@@ -1473,24 +1480,24 @@ def _build_slide(prs, layout, q, page_num, tmpl, *, title_suffix: str = "") -> N
               align=PP_ALIGN.RIGHT, anchor="ctr")
 
 
-# ── Dzung_team slide builder ──────────────────────────────────────────────────────
+# ── "default"-format slide builder ────────────────────────────────────────────
 #
 # Unlike the general format (which builds every slide from scratch — a plain
 # add_shape rectangle for the footer bar, manual textboxes for title/Q-label/
-# page number — see _build_slide above), Dzung_team slides are built on the
-# bundled appendix_templates/dzung_team_template.pptx's own "use_dz" slide
+# page number — see _build_slide above), "default"-format slides are built on
+# the bundled appendix_templates/default_template.pptx's own "use_dz" slide
 # layout, so all of the company-branded background bars/colors come for free
 # from that layout/master and never need to be redrawn in code. Only the
 # TWO placeholders add_slide() does NOT auto-instantiate from a layout —
 # sldNum (idx 10) and footer (idx 11), both literal <p:sp> shapes in the
 # layout's own spTree rather than "special" auto-generated ones — need to be
-# cloned in manually per slide; see _dz_find_ph / _dz_new_slide.
+# cloned in manually per slide; see _default_find_ph / _default_new_slide.
 
-def _dz_find_ph(layout_element, idx: int):
+def _default_find_ph(layout_element, idx: int):
     """Find the <p:sp> for placeholder `idx` directly in a slide layout's
     (or slide's) own spTree — used for sldNum/footer, which python-pptx's
     add_slide() does not auto-copy from the layout (only ph types with no
-    special `type` attribute, e.g. Dzung_team's idx 12/13/14 "body" ones, get
+    special `type` attribute, e.g. this format's idx 12/13/14 "body" ones, get
     auto-instantiated)."""
     spTree = layout_element.find(qn("p:cSld")).find(qn("p:spTree"))
     for sp in spTree.findall(qn("p:sp")):
@@ -1500,9 +1507,9 @@ def _dz_find_ph(layout_element, idx: int):
     return None
 
 
-def _dz_set_first_slide_num(prs, start_page: int) -> None:
-    """Dzung_team's page number is a real auto-updating <a:fld type="slidenum">
-    field (cloned from the layout, see _dz_new_slide) rather than the
+def _default_set_first_slide_num(prs, start_page: int) -> None:
+    """This format's page number is a real auto-updating <a:fld type="slidenum">
+    field (cloned from the layout, see _default_new_slide) rather than the
     general format's plain page-number textbox — it always reflects the
     slide's actual position in the deck. To honor a non-default --start-page
     the same way the general format does, set the presentation-level "first
@@ -1512,11 +1519,11 @@ def _dz_set_first_slide_num(prs, start_page: int) -> None:
         prs.part._element.set("firstSlideNum", str(start_page))
 
 
-def _dz_new_slide(prs, layout, sldnum_sp, ftr_sp):
-    """Add a new slide from the Dzung_team "use_dz" layout: idx 12/13/14
+def _default_new_slide(prs, layout, sldnum_sp, ftr_sp):
+    """Add a new slide from the "default"-format "use_dz" layout: idx 12/13/14
     placeholders come for free via add_slide(); idx 14 (the big unused
-    "Area for charting" content placeholder — Dzung_team slides place charts
-    manually, like the general format) is removed; idx 10 (page number) and
+    "Area for charting" content placeholder — "default"-format slides place
+    charts manually, like the general format) is removed; idx 10 (page number) and
     11 (footer) are cloned in from the layout's own template `<p:sp>`
     elements (captured once by the caller — see generate()).
 
@@ -1543,7 +1550,7 @@ def _dz_new_slide(prs, layout, sldnum_sp, ftr_sp):
     return slide
 
 
-def _dz_set_footer(slide, question: str, label: str, base) -> None:
+def _default_set_footer(slide, question: str, label: str, base) -> None:
     """Footer placeholder (idx 11): one plain gray run — "Q17_R1.  {label}
     (N=249)" — unlike the general format's 3-color _add_q_label, matching
     the bundled template's own single-run footer styling."""
@@ -1551,14 +1558,14 @@ def _dz_set_footer(slide, question: str, label: str, base) -> None:
     tf = ph.text_frame
     tf.text = f"{question}.  {label}  (N={base})"
     run = tf.paragraphs[0].runs[0]
-    run.font.color.rgb = DZ_C_GRAY
-    _set_run_font(run, DZ_FONT)
+    run.font.color.rgb = DEFAULT_C_GRAY
+    _set_run_font(run, DEFAULT_FONT)
 
 
-def _build_slide_dzung_team(prs, layout, q, page_num, tmpl, sldnum_sp, ftr_sp,
+def _build_slide_default(prs, layout, q, page_num, tmpl, sldnum_sp, ftr_sp,
                          section_label: str, *, title_suffix: str = "") -> None:
-    slide = _dz_new_slide(prs, layout, sldnum_sp, ftr_sp)
-    theme = DZ_THEME
+    slide = _default_new_slide(prs, layout, sldnum_sp, ftr_sp)
+    theme = DEFAULT_THEME
     chart_type = q.get("chart_type", "bar_vertical")
     breakdowns = q.get("breakdowns", [])
     note_lines = [f"Question type: {_question_type_label(q)}"]
@@ -1571,40 +1578,41 @@ def _build_slide_dzung_team(prs, layout, q, page_num, tmpl, sldnum_sp, ftr_sp,
     slide.placeholders[13].text_frame.text = title_text
 
     if chart_type == "donut_stacked":
-        _add_section_label(slide, DZ_DT_TOTAL_L, DZ_DT_TOTAL_T, DZ_DT_TOTAL_W,
+        _add_section_label(slide, DEFAULT_DT_TOTAL_L, DEFAULT_DT_TOTAL_T, DEFAULT_DT_TOTAL_W,
                            "Total", height=Emu(219456), theme=theme)
-        _build_donut(slide, q, tmpl, DZ_DT_LEFT_L, DZ_DT_LEFT_T,
-                    DZ_DT_LEFT_W, DZ_DT_LEFT_H, theme=theme)
+        _build_donut(slide, q, tmpl, DEFAULT_DT_LEFT_L, DEFAULT_DT_LEFT_T,
+                    DEFAULT_DT_LEFT_W, DEFAULT_DT_LEFT_H, theme=theme)
         if breakdowns:
             combined = " / ".join(bd["group_label"] for bd in breakdowns)
-            _add_section_label(slide, DZ_DT_RIGHT_LBL_L, DZ_DT_RIGHT_LBL_T,
-                               DZ_DT_RIGHT_LBL_W, combined,
+            _add_section_label(slide, DEFAULT_DT_RIGHT_LBL_L, DEFAULT_DT_RIGHT_LBL_T,
+                               DEFAULT_DT_RIGHT_LBL_W, combined,
                                height=Emu(219456), theme=theme)
             _build_stacked(slide, q, breakdowns, tmpl,
-                           DZ_DT_RIGHT_L, DZ_DT_RIGHT_T,
-                           DZ_DT_RIGHT_W, DZ_DT_RIGHT_H, theme=theme)
+                           DEFAULT_DT_RIGHT_L, DEFAULT_DT_RIGHT_T,
+                           DEFAULT_DT_RIGHT_W, DEFAULT_DT_RIGHT_H, theme=theme)
     else:
         # bar_horizontal (MA) AND the general format's bar_vertical fallback
-        # (large-choice SA-Nominal) both map to Dzung_team's one non-donut
-        # layout — the bundled template only demonstrates a horizontal-bar
-        # 3-column style, not a vertical-column one (see the module comment
-        # above _dz_find_ph / the "Dzung_team format geometry" constants block).
-        _add_section_label(slide, _dz_bh_col_l(0), DZ_BH_LBL_T, DZ_BH_COL_W,
+        # (large-choice SA-Nominal) both map to "default"-format's one
+        # non-donut layout — the bundled template only demonstrates a
+        # horizontal-bar 3-column style, not a vertical-column one (see the
+        # module comment above _default_find_ph / the "'default' format
+        # geometry" constants block).
+        _add_section_label(slide, _default_bh_col_l(0), DEFAULT_BH_LBL_T, DEFAULT_BH_COL_W,
                            "Total", height=Emu(219456), theme=theme)
-        _build_total_bar(slide, q, tmpl, _dz_bh_col_l(0), DZ_BH_CHART_T,
-                         DZ_BH_COL_W, DZ_BH_CHART_H, theme=theme)
+        _build_total_bar(slide, q, tmpl, _default_bh_col_l(0), DEFAULT_BH_CHART_T,
+                         DEFAULT_BH_COL_W, DEFAULT_BH_CHART_H, theme=theme)
         for gi, bd in enumerate(breakdowns[:MAX_GROUPS_PER_SLIDE]):
-            col_l = _dz_bh_col_l(gi + 1)
-            _add_section_label(slide, col_l, DZ_BH_LBL_T, DZ_BH_COL_W,
+            col_l = _default_bh_col_l(gi + 1)
+            _add_section_label(slide, col_l, DEFAULT_BH_LBL_T, DEFAULT_BH_COL_W,
                                bd["group_label"], height=Emu(219456), theme=theme)
             _build_breakdown_bar(slide, q, bd, tmpl,
-                                 col_l, DZ_BH_CHART_T, DZ_BH_COL_W, DZ_BH_CHART_H,
+                                 col_l, DEFAULT_BH_CHART_T, DEFAULT_BH_COL_W, DEFAULT_BH_CHART_H,
                                  theme=theme)
         if breakdowns and len(q.get("choices", [])) >= MA_CROSSTAB_MIN_ITEMS:
             note_lines.append(MA_CROSSTAB_NOTE)
 
     q_base = q.get("total", {}).get("base", "XX")
-    _dz_set_footer(slide, q.get("question", ""), q_label, q_base)
+    _default_set_footer(slide, q.get("question", ""), q_label, q_base)
     _set_slide_note(slide, "\n".join(note_lines))
 
 
@@ -1615,7 +1623,7 @@ def _load_templates(templates_dir: str, *,
                     extractor_hint: str = "extract_chart_templates.py"):
     """Load the bundled chart-style chartSpace elements from XML files —
     4 roles (bar/col/donut/stacked) for the general format, 3
-    (bar/donut/stacked, no "col") for Dzung_team — see `roles`."""
+    (bar/donut/stacked, no "col") for "default" — see `roles`."""
     base = Path(templates_dir)
     tmpl = {}
     for role in roles:
@@ -1628,39 +1636,102 @@ def _load_templates(templates_dir: str, *,
     return tmpl
 
 
-def _default_templates_dir() -> str:
+def _general_templates_dir() -> str:
     """Return the bundled chart_templates directory inside the installed package."""
     return str(Path(__file__).parent / "chart_templates")
 
 
-def _default_dzung_team_templates_dir() -> str:
-    """Return the bundled Dzung_team chart_templates directory."""
-    return str(Path(__file__).parent / "chart_templates_dzung_team")
+def _default_templates_dir() -> str:
+    """Return the bundled "default"-format chart_templates directory."""
+    return str(Path(__file__).parent / "chart_templates_default")
 
 
-def _default_dzung_team_pptx_path() -> str:
-    """Return the bundled (slide-stripped) Dzung_team base presentation — see
-    tools/extract_chart_templates_dzung_team.py's module docstring for why it
-    has no slides."""
-    return str(Path(__file__).parent / "appendix_templates" / "dzung_team_template.pptx")
+def _default_pptx_path() -> str:
+    """Return the bundled (slide-stripped) "default"-format base presentation
+    — see tools/extract_chart_templates_default.py's module docstring for why
+    it has no slides."""
+    return str(Path(__file__).parent / "appendix_templates" / "default_template.pptx")
 
 
-def _dz_load_base(pptx_path: str):
-    """Open the bundled Dzung_team base presentation and return
+def _default_load_base(pptx_path: str):
+    """Open the bundled "default"-format base presentation and return
     (prs, use_dz_layout, sldnum_sp_template, ftr_sp_template) — the last two
     are deep-copyable <p:sp> elements for the sldNum/footer placeholders,
     captured from the layout itself since add_slide() doesn't auto-copy
-    those two ph types (see _dz_new_slide)."""
+    those two ph types (see _default_new_slide)."""
     prs = Presentation(pptx_path)
     layout = next((l for l in prs.slide_layouts if l.name == "use_dz"), None)
     if layout is None:
         raise RuntimeError(
             f"Slide layout 'use_dz' not found in '{pptx_path}' — the bundled "
-            "Dzung_team template may be corrupted or was replaced incorrectly.")
+            "\"default\"-format template may be corrupted or was replaced incorrectly.")
     layout_el = layout._element
-    sldnum_sp = _dz_find_ph(layout_el, 10)
-    ftr_sp    = _dz_find_ph(layout_el, 11)
+    sldnum_sp = _default_find_ph(layout_el, 10)
+    ftr_sp    = _default_find_ph(layout_el, 11)
     return prs, layout, sldnum_sp, ftr_sp
+
+
+# Default customer-logo choice — the bundled template already ships with the
+# Acecook logo placed top-right of the Q&Me one (see _default_apply_customer_logo).
+DEFAULT_LOGO = "acecook"
+
+
+def _default_apply_customer_logo(prs, logo: str | None) -> None:
+    """Swap or remove the customer-logo picture that sits to the right of the
+    Q&Me logo on every "default"-format slide (both are baked into
+    the bundled template's slide master, so they render on every slide for
+    free — see the "CustomerLogo"/"QMeLogo" shape names set on
+    default_template.pptx). The Q&Me logo itself is never touched.
+
+    `logo` (case-insensitive):
+        "acecook" (default) — no-op, keep the bundled Acecook picture as-is.
+        "none"              — delete the customer-logo picture AND the
+                               vertical divider line between it and the Q&Me
+                               logo ("LogoDivider" — otherwise a stray "|"
+                               would be left dangling with nothing after it),
+                               leaving only the Q&Me logo.
+        anything else       — treated as a path to a replacement logo image;
+                               the Acecook picture is removed and the new
+                               image is inserted in the same slot, scaled
+                               (preserving its own aspect ratio) to fit
+                               inside the original picture's bounding box
+                               and centered within it. The divider line is
+                               kept — there are still two logos to separate.
+    """
+    logo = (logo or DEFAULT_LOGO).strip()
+    if logo.lower() == DEFAULT_LOGO:
+        return
+
+    master = prs.slide_masters[0]
+    pic_shape = next((s for s in master.shapes if s.name == "CustomerLogo"), None)
+    if pic_shape is None:
+        return  # template has no customer-logo slot to touch
+
+    box_l, box_t = pic_shape.left, pic_shape.top
+    box_w, box_h = pic_shape.width, pic_shape.height
+    pic_shape._element.getparent().remove(pic_shape._element)
+
+    if logo.lower() == "none":
+        divider = next((s for s in master.shapes if s.name == "LogoDivider"), None)
+        if divider is not None:
+            divider._element.getparent().remove(divider._element)
+        return
+
+    logo_path = Path(logo)
+    if not logo_path.exists():
+        raise FileNotFoundError(f"Customer logo image not found: {logo_path}")
+
+    image_part, rId = master.part.get_or_add_image_part(str(logo_path))
+    native_w, native_h = image_part.scale(None, None)
+    fit = min(int(box_w) / int(native_w), int(box_h) / int(native_h))
+    final_w = int(native_w * fit)
+    final_h = int(native_h * fit)
+    final_x = int(box_l) + (int(box_w) - final_w) // 2
+    final_y = int(box_t) + (int(box_h) - final_h) // 2
+    master.shapes._spTree.add_pic(
+        master.shapes._next_shape_id, "CustomerLogo", logo_path.name,
+        rId, final_x, final_y, final_w, final_h,
+    )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -1736,8 +1807,9 @@ def _chunk_breakdowns_by_col_count(breakdowns: list, max_cols: int) -> list[list
 def generate(chart_data_path: str, output_path: str, *,
              templates_dir: str | None = None, table_idx: int | None = None,
              start_page: int = 1, style: str | None = None,
-             dzung_team_pptx: str | None = None,
-             dz_section_label: str | None = None) -> None:
+             default_pptx: str | None = None,
+             default_section_label: str | None = None,
+             logo: str | None = None) -> None:
     """Generate a PowerPoint appendix from chart_data.json.
 
     Renders exactly one table (never "all tables merged") — see
@@ -1748,31 +1820,45 @@ def generate(chart_data_path: str, output_path: str, *,
         output_path:     Where to write the .pptx file.
         templates_dir:   Override chart template XML directory (default:
                           bundled — chart_templates/ for "general",
-                          chart_templates_dzung_team/ for "dzung_team").
+                          chart_templates_default/ for "default").
         table_idx:       If set, export this table index (0-based) instead of
                           auto-selecting by sub_title.
         start_page:      Starting page number shown in slides (default: 1).
-        style:           "general" (default) or "dzung_team". If not given,
-                          falls back to the selected table's own
+        style:           "default" (company-branded, the default) or
+                          "general" (surveyflow's plain style, kept as an
+                          opt-in override — never auto-selected). If not
+                          given, falls back to the selected table's own
                           ``appendix_format`` field in chart_data.json (see
-                          CLAUDE.md Workflow D), then "general".
-        dzung_team_pptx:     Override the bundled Dzung_team base .pptx (default: bundled).
-        dz_section_label: Override the Dzung_team format's language-dependent
+                          CLAUDE.md Workflow D), then "default". The legacy
+                          value "dzung_team" is accepted as an alias for
+                          "default" (old chart_data.json/datatable.json files).
+        default_pptx:     Override the bundled "default"-format base .pptx
+                          (default: bundled).
+        default_section_label: Override the "default" format's language-dependent
                           section tag (default: "PHỤ LỤC"/"APPENDIX" per the
                           chart_data.json's own "lang" field — see
-                          _dz_default_section_label).
+                          _default_section_label).
+        logo:             Customer logo for the "default" format only — see
+                          _default_apply_customer_logo. If not given, falls back to
+                          the selected table's own ``appendix_logo`` field in
+                          chart_data.json, then "acecook". Ignored when
+                          style == "general" (that layout has no logos).
     """
     data = json.loads(Path(chart_data_path).read_text(encoding="utf-8"))
     tbl = _select_table(data.get("tables", []), table_idx)
-    style = (style or tbl.get("appendix_format") or "general").strip().lower()
-    if style not in ("general", "dzung_team"):
-        raise ValueError(f"Unknown appendix style '{style}' — expected 'general' or 'dzung_team'.")
-
+    style = (style or tbl.get("appendix_format") or "default").strip().lower()
     if style == "dzung_team":
-        _generate_dzung_team(tbl, output_path, templates_dir=templates_dir,
-                          start_page=start_page, dzung_team_pptx=dzung_team_pptx,
-                          section_label=dz_section_label,
-                          lang=data.get("lang", "vi"))
+        style = "default"
+    if style not in ("general", "default"):
+        raise ValueError(f"Unknown appendix style '{style}' — expected 'general' or 'default'.")
+
+    if style == "default":
+        logo = logo or tbl.get("appendix_logo") or DEFAULT_LOGO
+        _generate_default(tbl, output_path, templates_dir=templates_dir,
+                          start_page=start_page, default_pptx=default_pptx,
+                          section_label=default_section_label,
+                          lang=data.get("lang", "vi"),
+                          logo=logo)
     else:
         _generate_general(tbl, output_path, templates_dir=templates_dir,
                           start_page=start_page)
@@ -1780,7 +1866,7 @@ def generate(chart_data_path: str, output_path: str, *,
 
 def _generate_general(tbl: dict, output_path: str, *,
                       templates_dir: str | None, start_page: int) -> None:
-    tmpl = _load_templates(templates_dir or _default_templates_dir())
+    tmpl = _load_templates(templates_dir or _general_templates_dir())
 
     prs = Presentation()
     prs.slide_width  = SW
@@ -1795,19 +1881,21 @@ def _generate_general(tbl: dict, output_path: str, *,
     _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides)")
 
 
-def _generate_dzung_team(tbl: dict, output_path: str, *,
+def _generate_default(tbl: dict, output_path: str, *,
                       templates_dir: str | None, start_page: int,
-                      dzung_team_pptx: str | None,
-                      section_label: str | None, lang: str = "vi") -> None:
-    tmpl = _load_templates(templates_dir or _default_dzung_team_templates_dir(),
+                      default_pptx: str | None,
+                      section_label: str | None, lang: str = "vi",
+                      logo: str | None = None) -> None:
+    tmpl = _load_templates(templates_dir or _default_templates_dir(),
                            roles=("bar", "donut", "stacked"),
-                           extractor_hint="tools/extract_chart_templates_dzung_team.py")
-    prs, layout, sldnum_sp, ftr_sp = _dz_load_base(dzung_team_pptx or _default_dzung_team_pptx_path())
-    _dz_set_first_slide_num(prs, start_page)
-    label = section_label or _dz_default_section_label(lang)
+                           extractor_hint="tools/extract_chart_templates_default.py")
+    prs, layout, sldnum_sp, ftr_sp = _default_load_base(default_pptx or _default_pptx_path())
+    _default_set_first_slide_num(prs, start_page)
+    _default_apply_customer_logo(prs, logo)
+    label = section_label or _default_section_label(lang)
 
     def add_slide(q, page, *, title_suffix=""):
-        _build_slide_dzung_team(prs, layout, q, page, tmpl, sldnum_sp, ftr_sp,
+        _build_slide_default(prs, layout, q, page, tmpl, sldnum_sp, ftr_sp,
                              label, title_suffix=title_suffix)
 
     page = _emit_slides(tbl, add_slide, start_page)
@@ -1819,7 +1907,7 @@ def _emit_slides(tbl: dict, add_slide, start_page: int) -> int:
     """Shared question -> slide(s) dispatch loop (chunking rules for
     many-column donut_stacked / many-group bar layouts) — identical for both
     formats, since only what a single `add_slide(q, page, title_suffix=...)`
-    call actually draws differs (see _generate_general / _generate_dzung_team).
+    call actually draws differs (see _generate_general / _generate_default).
     Returns the next unused page number."""
     page = start_page
     for q in tbl.get("questions", []):
@@ -1874,22 +1962,30 @@ def main(argv=None) -> None:
                          "sub_title — 'Appendix', else 'General')")
     ap.add_argument("--start-page", type=int, default=1, dest="start_page",
                     help="Starting page number (default: 1)")
-    ap.add_argument("--format", choices=("general", "dzung_team"), default=None,
+    ap.add_argument("--format", choices=("general", "default"), default=None,
                     help="Appendix visual style (default: the selected table's "
                          "own \"appendix_format\" field in chart_data.json, "
-                         "else 'general')")
-    ap.add_argument("--dzung-team-pptx", default=None, dest="dzung_team_pptx",
-                    help="Override the bundled Dzung_team base .pptx (--format dzung_team only)")
-    ap.add_argument("--dz-section-label", default=None, dest="dz_section_label",
-                    help="Override Dzung_team's header tag, default "
-                         f"{DZ_SECTION_LABEL_VI!r}/{DZ_SECTION_LABEL_EN!r} "
-                         "per chart_data.json's \"lang\" field (--format dzung_team only)")
+                         "else 'default')")
+    ap.add_argument("--default-pptx", default=None, dest="default_pptx",
+                    help="Override the bundled base .pptx for the 'default' format "
+                         "(--format default only)")
+    ap.add_argument("--default-section-label", default=None, dest="default_section_label",
+                    help="Override the 'default' format's header tag, default "
+                         f"{DEFAULT_SECTION_LABEL_VI!r}/{DEFAULT_SECTION_LABEL_EN!r} "
+                         "per chart_data.json's \"lang\" field (--format default only)")
+    ap.add_argument("--logo", default=None,
+                    help="Customer logo for the 'default' format: 'acecook' "
+                         "(bundled, default), 'none' (Q&Me logo only), or a path "
+                         "to a replacement logo image. Falls back to the table's "
+                         "own \"appendix_logo\" field in chart_data.json, then "
+                         "'acecook'. Ignored for --format general.")
     args = ap.parse_args(argv)
     generate(args.chart_data, args.output,
              templates_dir=args.templates,
              table_idx=args.table, start_page=args.start_page,
-             style=args.format, dzung_team_pptx=args.dzung_team_pptx,
-             dz_section_label=args.dz_section_label)
+             style=args.format, default_pptx=args.default_pptx,
+             default_section_label=args.default_section_label,
+             logo=args.logo)
 
 
 if __name__ == "__main__":

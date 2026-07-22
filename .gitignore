@@ -69,5 +69,5 @@ documents
 *.xml
 # Allow bundled chart templates inside the package
 !surveyflow/steps/appendix/chart_templates/*.xml
-!surveyflow/steps/appendix/chart_templates_dzung_team/*.xml
+!surveyflow/steps/appendix/chart_templates_default/*.xml
 !surveyflow/steps/appendix/appendix_templates/*.pptx

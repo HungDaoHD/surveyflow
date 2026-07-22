@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Extract the 3 Dzung_team-format chart-style templates from a styled .pptx.
+"""Extract the 3 "default"-format chart-style templates from a styled .pptx.
 
 Mirrors extract_chart_templates.py's role-cloning approach (see that file for
-the rationale), but for the "Dzung_team" appendix format — a company-branded
+the rationale), but for the "default" appendix format — a company-branded
 slide layout ("use_dz") with only 2 demo slides / 3 distinct chart styles
-(no vertical "col" role: Dzung_team's non-donut layout uses horizontal bars for
-every question, see generate_pptx.py's ACE_* section for why).
+(no vertical "col" role: this format's non-donut layout uses horizontal bars
+for every question, see generate_pptx.py's Layout C section for why).
 
-Writes surveyflow/steps/appendix/chart_templates_dzung_team/{bar,donut,stacked}.xml.
+Writes surveyflow/steps/appendix/chart_templates_default/{bar,donut,stacked}.xml.
 
 Roles (identified by chart type, not slide order):
     bar      bar_clustered, horizontal   → Total chart (single series, no legend;
@@ -17,8 +17,8 @@ Roles (identified by chart type, not slide order):
     donut    doughnut                    → Total chart (donut_stacked layout)
     stacked  col_percentStacked          → combined breakdown chart (donut_stacked layout)
 
-Re-run this only when you want to restyle the Dzung_team charts. NOTE: the
-bundled appendix_templates/dzung_team_template.pptx is a STRIPPED template (0
+Re-run this only when you want to restyle the "default"-format charts. NOTE:
+the bundled appendix_templates/default_template.pptx is a STRIPPED template (0
 slides — its 2 demo slides were deleted after extraction, keeping only the
 "use_dz" slide master/layout that generate_pptx.py clones slides from at
 runtime; see the one-off strip step in this project's session history). Keep
@@ -28,7 +28,7 @@ against the bundled (stripped) template will fail with "Could not find
 template charts". To restyle: open your un-stripped source .pptx in
 PowerPoint, adjust the 2 demo slides, save, then run:
 
-    python tools/extract_chart_templates_dzung_team.py path/to/your_unstripped_source.pptx
+    python tools/extract_chart_templates_default.py path/to/your_unstripped_source.pptx
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from pptx.oxml.ns import qn
 from lxml import etree
 
 OUT_DIR = (Path(__file__).resolve().parent.parent / "surveyflow"
-           / "steps" / "appendix" / "chart_templates_dzung_team")
+           / "steps" / "appendix" / "chart_templates_default")
 
 
 def _bardir(cs):
@@ -95,15 +95,15 @@ def extract(pptx_path: str) -> None:
         path.write_bytes(etree.tostring(cs, xml_declaration=True,
                                         encoding="UTF-8", standalone=True))
         print(f"  wrote {path}")
-    print(f"\nExtracted 3 Dzung_team chart templates -> {OUT_DIR}")
+    print(f"\nExtracted 3 \"default\"-format chart templates -> {OUT_DIR}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(
-            "Usage: python tools/extract_chart_templates_dzung_team.py "
+            "Usage: python tools/extract_chart_templates_default.py "
             "path/to/your_unstripped_source.pptx\n"
-            "(the bundled appendix_templates/dzung_team_template.pptx has no "
+            "(the bundled appendix_templates/default_template.pptx has no "
             "slides left to extract from — see this file's module docstring)"
         )
     extract(sys.argv[1])

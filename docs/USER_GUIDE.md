@@ -187,6 +187,7 @@ Khi đã có `datatable.xlsx` và muốn thay đổi, chỉ cần nói với Cla
 | "Thêm total cho từng banner group" | Thêm cột Total cho từng nhóm banner |
 | "Nhóm Q13/Q14/Q17 theo brand" | Tạo row_group theo tên brand |
 | "Brand làm header, dùng Q17" | Thêm banner_matrix từ Q17 |
+| "Tạo bảng riêng cho từng brand, appendix gộp 1 file" | Tạo nhiều bảng con lọc theo brand, gộp chung 1 file PPTX (mỗi brand 1 Section) |
 | "Refresh data / fetch lại" | Tải data mới từ QMe, chạy lại toàn bộ |
 | "Xuất tiếng Anh" | Re-run với `--lang en` |
 
@@ -210,6 +211,23 @@ output/SURVEY_NAME/v1/slides.pptx
 - SA với ≤5 lựa chọn / Likert → donut chart
 - MA → bar ngang
 - SA với >5 lựa chọn → cột dọc
+
+### Tạo appendix riêng theo từng brand/nhãn hàng
+
+Nếu bảng có nhiều bảng con (VD mỗi brand 1 bảng riêng, chỉ tính người dùng brand đó), bạn có thể:
+
+> *"Tạo appendix riêng cho từng brand"*  
+> *"Base của bảng Hảo Hảo chỉ tính người chọn Hảo Hảo ở Q2"*
+
+Claude gộp tất cả brand vào **1 file PPTX duy nhất**, mỗi brand là 1 **Section** riêng trong
+PowerPoint (xem trong Slide Sorter/Outline view) để dễ nhảy nhanh giữa các brand khi review —
+không tốn thêm slide chia trang cho từng brand.
+
+Nếu có **nhiều bảng** trong file mà chưa rõ chạy bảng nào, Claude sẽ hỏi:
+> *"Bạn muốn chạy appendix cho bảng nào? Total, Hảo Hảo, Mì Đệ Nhất... (chọn 1, vài tên, hoặc 'All')"*
+
+Câu trả lời được **lưu lại** — các lần chạy appendix sau tự dùng lại, không hỏi lại trừ khi bạn
+muốn đổi.
 
 ---
 
@@ -367,6 +385,10 @@ A: Nói với Claude: *"Cho tôi xem config bảng hiện tại"* hoặc *"datat
 
 **Q: Bảng ra 0 rows?**  
 A: Nói *"bao gồm cả người chưa duyệt (pending)"* — có thể data chỉ có profile pending chưa approved.
+
+**Q: Appendix tách được theo từng brand/nhãn hàng không?**  
+A: Có. Nói *"tạo appendix riêng cho từng brand"* — Claude gộp tất cả brand vào 1 file PPTX, mỗi
+brand là 1 Section riêng trong PowerPoint để dễ nhảy nhanh giữa các brand khi review.
 
 ---
 

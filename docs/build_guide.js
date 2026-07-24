@@ -469,6 +469,24 @@ const children = [
   para([r("Claude hỏi xác nhận rồi tạo file "), mono("output/VN8966/v1/slides.pptx"), r(".")]),
   sp(80),
   para("Mỗi câu hỏi → 1 slide, biểu đồ editable trong PowerPoint, style khớp template công ty."),
+  sp(80),
+
+  h2("Tạo appendix riêng theo từng brand/nhãn hàng"),
+  codeBlock([
+    "Tạo appendix riêng cho từng brand",
+    "Base của bảng Hảo Hảo chỉ tính người chọn Hảo Hảo ở Q2",
+  ]),
+  sp(80),
+  para("Claude gộp tất cả brand vào 1 file PPTX, mỗi brand là 1 Section riêng trong PowerPoint (Slide Sorter/Outline view) để dễ nhảy nhanh giữa các brand khi review — không tốn thêm slide chia trang."),
+  sp(80),
+  para("Nếu có nhiều bảng mà chưa rõ chạy bảng nào, Claude hỏi:"),
+  sp(60),
+  callout(
+    [[ri("\"Bạn muốn chạy appendix cho bảng nào? Total, Hảo Hảo, Mì Đệ Nhất... (1, vài tên, hoặc 'All')\"")]],
+    BLUE_LIGHT, "🤖"
+  ),
+  sp(80),
+  para("Câu trả lời được lưu lại — lần sau tự dùng lại, không hỏi lại trừ khi bạn muốn đổi."),
   sp(),
 
   // ─── 8. Thay đổi bảng ─────────────────────────────────────────────────────
@@ -570,6 +588,7 @@ const children = [
     "xuất tiếng Anh / xuất tiếng Việt",
     "tải lại data mới",
     "tạo appendix PPTX / chạy slides",
+    "tạo appendix riêng cho từng brand",
     "file kết quả ở đâu?",
   ]),
   sp(),
@@ -617,6 +636,9 @@ const children = [
 
   ...faq("Muốn thêm sig test?",
     [r("Nhắn: "), rb("\"bật sig test\""), r(" — Claude thêm sheet Sig test và chạy lại. Mặc định bảng chỉ có Count và Percentage.")]),
+
+  ...faq("Appendix tách được theo từng brand/nhãn hàng không?",
+    [r("Có. Nhắn "), rb("\"tạo appendix riêng cho từng brand\""), r(" — Claude gộp tất cả brand vào 1 file PPTX, mỗi brand là 1 Section riêng trong PowerPoint để dễ nhảy nhanh giữa các brand khi review.")]),
 
   ...faq("Tôi muốn xem cấu hình bảng hiện tại?",
     [r("Nhắn: "), rb("\"cho tôi xem config bảng hiện tại\""), r(" — Claude tóm tắt banner, stub, và loại bảng đang dùng.")]),

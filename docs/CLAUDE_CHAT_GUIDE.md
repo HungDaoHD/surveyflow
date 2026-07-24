@@ -222,6 +222,19 @@ output/VN8966/v1/slides.pptx
 
 Mỗi câu hỏi → 1 slide, biểu đồ **editable** trong PowerPoint, style khớp template công ty.
 
+**Tạo appendix riêng theo từng brand/nhãn hàng:**
+
+> *"Tạo appendix riêng cho từng brand"*  
+> *"Base của bảng Hảo Hảo chỉ tính người chọn Hảo Hảo ở Q2"*
+
+Claude gộp tất cả brand vào **1 file PPTX**, mỗi brand là 1 Section riêng trong PowerPoint (Slide
+Sorter/Outline view) để dễ nhảy nhanh giữa các brand khi review — không tốn thêm slide chia trang.
+
+Nếu có nhiều bảng mà chưa rõ chạy bảng nào, Claude hỏi:
+> *"Bạn muốn chạy appendix cho bảng nào? Total, Hảo Hảo, Mì Đệ Nhất... (1, vài tên, hoặc 'All')"*
+
+Câu trả lời được lưu lại — lần sau tự dùng lại, không hỏi lại trừ khi bạn muốn đổi.
+
 ---
 
 ## Thay đổi bảng sau khi chạy
@@ -303,6 +316,7 @@ chỉ giữ sheet Percentage
 xuất tiếng Anh / xuất tiếng Việt
 tải lại data mới
 tạo appendix PPTX / chạy slides
+tạo appendix riêng cho từng brand
 file kết quả ở đâu?
 ```
 
@@ -352,6 +366,10 @@ Mỗi lần thay đổi bảng → Claude tạo thêm thư mục mới (v2, v3�
 
 **Muốn bảng tiếng Anh?**  
 → Nhắn: *"xuất bảng tiếng Anh"* bất cứ lúc nào — Claude chạy lại với nhãn tiếng Anh.
+
+**Appendix tách được theo từng brand/nhãn hàng không?**  
+→ Có. Nhắn *"tạo appendix riêng cho từng brand"* — Claude gộp tất cả brand vào 1 file PPTX, mỗi
+brand là 1 Section riêng trong PowerPoint để dễ nhảy nhanh giữa các brand khi review.
 
 **Muốn thêm sig test?**  
 → Nhắn: *"bật sig test"* — Claude thêm sheet Sig test và chạy lại.

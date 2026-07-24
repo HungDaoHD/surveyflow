@@ -597,12 +597,23 @@ R003,    0,     0,     0,     0,      1,      0,      0,       1
 - `{ "type": "datatable", ... }` → bảng chéo thông thường (hoặc bỏ qua `type`, default là datatable)
 - `{ "_custom_defs": [...] }` → khối định nghĩa filter dùng chung (không sinh sheet, chỉ dùng để tham chiếu)
 
+**Thứ tự field chuẩn trong 1 table item** — giữ nhất quán khi Claude tạo mới hoặc sửa
+`datatable.json` (không bắt buộc với field không có trong item, và `type` thường bỏ qua vì
+default đã là `"datatable"`):
+`type` (nếu có) → `title` → `sub_title` → `filter` (nếu có) → `tables` → `is_appendix` (nếu có)
+→ `banner` → `stub` → các field khác (`appendix_format`, `appendix_logo`, `matrix_orientation`,
+`matrix_rows`, `sig_direction`, `banner_matrix`...) chèn ngay sau `is_appendix`.
+
 ```json
 [
   {
-    "type": "datatable",
     "title": "SURVEY_NAME - Data Table",
     "sub_title": "General",
+    "tables": [
+      { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
+      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 },
+      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "levels": [90, 95], "method": "independent", "enabled": true }
+    ],
     "banner": [
       { "label": "Total", "filter": null },
       {
@@ -624,11 +635,6 @@ R003,    0,     0,     0,     0,      1,      0,      0,       1
           { "label": "B2B", "codes": [1, 2], "type": "combine" }
         ]
       }
-    ],
-    "tables": [
-      { "sheet": "Count", "cell_content": "count",      "show_sig": false, "enabled": true },
-      { "sheet": "Pct",   "cell_content": "percentage", "show_sig": false, "enabled": true, "decimal": 0 },
-      { "sheet": "Sig",   "cell_content": "percentage", "show_sig": true,  "levels": [90, 95], "method": "independent", "enabled": true }
     ]
   }
 ]
@@ -643,6 +649,65 @@ Sheet tab name = `{sub_title} - {sheet}` → ví dụ `"General - Count"`, `"Gen
 - **Question reference: use the question label** (e.g. `"Q10"`) — this is the `label` field in metadata.json
 - To find choice codes → read `output/SURVEY_NAME/data/metadata.json` → find question → inspect `choices_i18n`
 - **MA questions are supported as banner** — each code becomes a column; respondents can appear in multiple columns
+
+#### Filter cấp table (per-brand/segment table) — field `"filter"` trên table item
+
+Bảng bình thường (`{ "label": "Total", "filter": null }`, không hậu tố, không cần lọc gì) →
+không cần đọc mục này.
+
+Khi tạo **nhiều table riêng theo từng brand/segment** (VD Workflow D — mỗi brand/segment 1 table
+với `"is_appendix": true`, xem bảng common-requests), **toàn bộ respondent của table đó** cần lọc
+theo 1 điều kiện chung (VD chỉ tính người dùng brand X, `Q2 == mã brand`). Dùng field **`"filter"`**
+ngay cấp table (cùng cấp `"banner"`/`"stub"`) — áp dụng cho **mọi banner column** (kể cả Total)
+**và** mọi phép tính stub (base/percent/mean) của riêng table đó, các table khác trong cùng
+`datatable.json` không bị ảnh hưởng:
+
+```json
+{
+  "title": "SURVEY_NAME - Data Table (Base: Q2 chọn Hảo Hảo)",
+  "sub_title": "Hảo Hảo",
+  "filter": { "question": "Q2", "codes": [1] },
+  "tables": [...],
+  "is_appendix": true,
+  "banner": [
+    { "label": "Total" },
+    { "label": "Khu vực", "question": "SC3", "groups": [...] }
+  ],
+  "stub": [...]
+}
+```
+
+Nhờ filter áp dụng trước khi tính banner, cột Total ở đây **chỉ cần viết trần**
+`{ "label": "Total" }` như bảng bình thường — KHÔNG cần lặp lại điều kiện lọc trên từng banner
+column, KHÔNG cần field `"is_total"` thủ công (đơn giản hơn hẳn cách cũ ở dưới).
+
+**Cú pháp `"filter"`** — dùng chung với `_custom_defs`/`custom_ref` (xem mục dưới), hỗ trợ lồng
+nhiều cấp `and`/`or` tuỳ ý:
+```json
+{ "question": "Q2", "codes": [1, 2], "op": "any" }
+{ "and": [ { "question": "Q2", "codes": [1] }, { "question": "SC3", "codes": [12,41,20,38] } ] }
+{ "or":  [ { "question": "Q2", "codes": [1] }, { "question": "Q2", "codes": [5] } ] }
+{ "and": [ { "question": "Q2", "codes": [1] },
+           { "or": [ { "question": "SC3", "codes": [12] }, { "question": "SC3", "codes": [14] } ] } ] }
+```
+`op` mặc định `"any"` (chọn ít nhất 1 code); `"all"` chỉ có ý nghĩa với câu MA (phải chọn **hết**
+các code liệt kê).
+
+**Kiểm tra sau khi tạo**: mở `chart_data.json`, xác nhận `"total"` của vài câu trong table đó
+**không rỗng** (`{"base": N>0, "percents": {...}}`) trước khi báo user là xong.
+
+**Cách cũ (không dùng field `"filter"`)** — nếu vì lý do nào đó chỉ cần lọc RIÊNG cột Total (không
+lọc cả table), vẫn có thể viết Total dạng `groups`/`conditions` như 1 breakdown bình thường +
+thêm **`"is_total": true`** trên đúng group đó:
+```json
+{ "label": "Total", "groups": [
+  { "label": "Total", "conditions": [{ "question": "Q2", "value": 1 }], "is_total": true }
+]}
+```
+> ⚠️ Thiếu `"is_total": true` ở cách này → appendix PPTX âm thầm sinh 0 slide cho table đó dù
+> `datatable.xlsx` vẫn đủ sheet (bug thực tế đã xảy ra) — vì group dạng `groups`/`conditions`
+> mặc định `is_total: false`. Ưu tiên dùng `"filter"` cấp table ở trên — đơn giản hơn và áp dụng
+> nhất quán cho cả banner lẫn stub, tránh quên field này.
 
 #### show_total — thêm cột Total trước các sub-groups
 
@@ -990,12 +1055,49 @@ Sau khi chạy bảng (Step 5 / Workflow B), table step **tự sinh** `chart_dat
 cạnh `datatable.xlsx`. Từ đó tạo bộ slide biểu đồ (**appendix**) — chart PowerPoint
 **editable**, mỗi câu 1 slide, style khớp template công ty.
 
-**Chọn table để chạy appendix** — appendix chỉ render **đúng 1 table** trong `datatable.json`
-(không bao giờ gộp tất cả tables lại), theo thứ tự ưu tiên `sub_title`:
-1. Table có `sub_title: "Appendix"` → dùng table này.
-2. Không có → table có `sub_title: "General"` → dùng table này.
-3. Không có cả 2 → **không chạy**, hỏi user tạo table với `sub_title: "Appendix"` trong
-   `datatable.json` (không tự đoán bảng khác).
+**Chọn table để chạy appendix** — appendix render **mọi table** trong `datatable.json` có field
+**`"is_appendix": true`**, gộp lại thành **1 file .pptx duy nhất**. Mỗi table đánh dấu là **1
+group** riêng, tên group = `sub_title` của table đó **nguyên văn** (KHÔNG còn quy ước prefix
+"Appendix -"/"General" — `sub_title` giờ là tên tự do, đặt gì cũng được, VD `"Total"`, `"Hảo
+Hảo"`, `"Omachi"`):
+
+```json
+{ "type": "datatable", "sub_title": "Hảo Hảo", "is_appendix": true, "banner": [...], ... }
+```
+
+- **Chỉ 1 table `is_appendix: true`** (trường hợp thường gặp) → render y như cũ, không chia
+  group, không hỏi gì thêm.
+- **≥2 table `is_appendix: true`** (VD nhiều brand) → mỗi group được bọc bởi 1 **PowerPoint
+  Section** (xem trong Slide Sorter/Outline view của PowerPoint) đúng các slide của group đó —
+  cho phép nhảy nhanh giữa các brand khi review. **Không** chèn slide riêng nào cho tên group —
+  group chỉ tốn đúng số slide câu hỏi của nó, không hơn. Style (`appendix_format`)/logo
+  (`appendix_logo`) áp dụng cho **cả deck** — lấy từ table `is_appendix: true` **đầu tiên** (hoặc
+  override `--format`/`--logo`); nếu 1 table khác trong deck khai `appendix_format` khác thì bị
+  bỏ qua kèm cảnh báo (in ra console, không lỗi).
+- **Không table nào được đánh dấu** → **không chạy**, hỏi user muốn chạy bảng nào (xem mục dưới)
+  rồi mới đánh dấu + chạy.
+- `--table N` (CLI) hoặc `table_idx=` (API) vẫn giữ hành vi cũ: chỉ render **đúng 1 table** theo
+  `table_index`, bỏ qua hoàn toàn cơ chế `is_appendix`/group ở trên (override 1 lần, không sửa
+  file).
+
+**Hỏi user muốn chạy bảng nào — LƯU câu trả lời vào `is_appendix`** (khác câu hỏi format/logo ở
+chỗ: đây **không phải** hỏi mỗi lần chạy — hỏi **một lần**, lưu vào `datatable.json`, các lần
+chạy appendix sau tự dùng lại y hệt format/logo, không hỏi lại trừ khi user muốn đổi bảng):
+
+1. Liệt kê **toàn bộ** table (không chỉ table đã đánh dấu): `surveyflow-pptx <chart_data.json>
+   --list-groups` → in JSON `[{"table_index", "sub_title", "is_appendix"}, ...]` cho MỌI table.
+2. Hỏi user (liệt kê đúng `sub_title` đã liệt kê ở bước 1, không tự bịa tên):
+   > *"Bạn muốn chạy appendix cho bảng nào? {sub_title1}, {sub_title2}, {sub_title3}...
+   > (chọn 1 hay nhiều tên, hoặc 'All' để chạy tất cả)"*
+3. Theo câu trả lời, **sửa `datatable.json`** — confirm với user trước khi sửa (theo quy tắc
+   chung "confirm trước khi sửa datatable.json"):
+   - **"All"** → set `"is_appendix": true` cho mọi table trong file (trừ `_custom_defs`).
+   - **1 hoặc vài tên cụ thể** → set `"is_appendix": true` cho đúng các table được chọn; table
+     nào **trước đó** đã `is_appendix: true` nhưng lần này KHÔNG được chọn lại → set `false`
+     (hoặc xoá field) để không còn tự chạy nữa.
+4. Sau khi đã lưu, chạy `surveyflow-pptx`/pipeline `--appendix` bình thường — **không cần**
+   `--tables` nữa cho flow chuẩn (field `is_appendix` đã quyết định sẵn). `--tables idx1,idx2`
+   vẫn dùng được để override **1 lần** mà không sửa file (VD test nhanh 1 table cụ thể).
 
 ### Format appendix — "default" (mặc định) hay "general"
 
@@ -1009,12 +1111,13 @@ khỏi mặc định (VD "chạy appendix format general"):
 
 ```json
 {
-  "type": "datatable",
+  "title": "SURVEY_NAME - Data Table",
   "sub_title": "Appendix",
+  "tables": [...],
+  "is_appendix": true,
   "appendix_format": "general",
   "banner": [...],
-  "stub": [...],
-  "tables": [...]
+  "stub": [...]
 }
 ```
 
@@ -1040,12 +1143,13 @@ Trước khi tạo appendix **lần đầu** cho 1 table dùng format `"default"
 
 ```json
 {
-  "type": "datatable",
+  "title": "SURVEY_NAME - Data Table",
   "sub_title": "Appendix",
+  "tables": [...],
+  "is_appendix": true,
   "appendix_logo": "output/SURVEY_NAME/assets/customer_logo.png",
   "banner": [...],
-  "stub": [...],
-  "tables": [...]
+  "stub": [...]
 }
 ```
 
@@ -1098,6 +1202,14 @@ chưa ưng ý, hoặc muốn nhấn mạnh khía cạnh khác của câu hỏi).
   "title": "Reasons to try economy noodles", "stats": ["base", "percent"] }
 ```
 
+> ⚠️ **KHÔNG tự thêm tiền tố `"{sub_title} - "` (tên table/brand) vào `title`** — dù table đó
+> nằm trong 1 deck gộp nhiều brand (`is_appendix` nhiều table). Group/brand name đã hiển thị
+> sẵn qua PowerPoint Section (xem `_add_pptx_sections`) mỗi khi deck có ≥2 group — lặp lại
+> trong từng `title` (VD `"Hảo Hảo - Giới tính"` thay vì `"Giới tính"`) là dư thừa, cùng lý do
+> divider slide theo group đã bị bỏ (xem `_add_pptx_sections` docstring). Bug thực tế đã xảy ra
+> ở `VN8971 - Acecook DBA` — cả 11 table đều bị ghi `title` kiểu `"{sub_title} - ..."`, đã dọn
+> lại bằng cách xoá tiền tố này khỏi mọi stub entry.
+
 **Khi Claude thêm 1 câu vào stub** (Step 4 hoặc Workflow B) và label câu đó **dài/khó đọc làm
 tiêu đề slide** (câu hỏi đầy đủ, nhiều mệnh đề phụ, ghi chú kỹ thuật kiểu "(Multiple)", "SHOW
 ANSWER OF..."), Claude tự đề xuất 1 bản tóm tắt ngắn gọn (5-10 từ, giữ đúng ý câu hỏi, bỏ phần
@@ -1114,9 +1226,11 @@ thì không cần đề xuất `title`, để `null` là đủ.
 set title riêng theo từng row/rank được. **row_group** (`items: [...]`) → set `title` trên từng
 item riêng nếu cần khác nhau theo từng câu con.
 
-**Confirm trước khi chạy** (giống chạy pipeline):
-> "Tôi sẽ tạo appendix PPTX (format {default/general}, logo {Acecook/khách hàng khác/không dùng})
-> từ chart_data.json. Bạn xác nhận không?"
+**Confirm trước khi chạy** (giống chạy pipeline) — sau khi đã hỏi + lưu `is_appendix` nếu chưa
+table nào được đánh dấu (xem "Hỏi user muốn chạy bảng nào"):
+> "Tôi sẽ tạo appendix PPTX (bảng: {All / tên các table đã đánh dấu is_appendix}, format
+> {default/general}, logo {Acecook/khách hàng khác/không dùng}) từ chart_data.json. Bạn xác nhận
+> không?"
 
 **Cách 1 — chạy kèm pipeline** (table + appendix trong 1 lệnh):
 ```bash
@@ -1133,11 +1247,15 @@ surveyflow-pptx \
   output/SURVEY_NAME/v1/slides.pptx
 ```
 
-Tuỳ chọn `surveyflow-pptx`: `--table N` (ghi đè bằng table_index cụ thể, bỏ qua auto-select
-theo `sub_title`), `--start-page N` (số trang bắt đầu), `--format general|default` (ghi đè
-`appendix_format` của table cho riêng lần chạy này, không lưu lại vào `datatable.json`),
-`--logo acecook|none|path/to/logo.png` (ghi đè `appendix_logo` của table cho riêng lần chạy
-này, chỉ áp dụng với `--format default`, không lưu lại vào `datatable.json`).
+Tuỳ chọn `surveyflow-pptx`: `--list-groups` (in JSON **mọi table** kèm `table_index`/`sub_title`/
+`is_appendix` hiện tại rồi thoát, không tạo pptx — dùng để hỏi user "chạy bảng nào", xem "Hỏi user
+muốn chạy bảng nào"), `--tables idx1,idx2` (override 1 lần: chạy đúng các `table_index` đã
+`is_appendix: true` được chọn, không sửa file, vẫn group như bình thường nếu ≥2), `--table N` (ghi
+đè bằng đúng 1 table_index cụ thể, bỏ qua toàn bộ cơ chế `is_appendix`/group), `--start-page N`
+(số trang bắt đầu), `--format general|default` (ghi đè `appendix_format` của table cho riêng lần
+chạy này, không lưu lại vào `datatable.json`), `--logo acecook|none|path/to/logo.png` (ghi đè
+`appendix_logo` của table cho riêng lần chạy này, chỉ áp dụng với `--format default`, không lưu
+lại vào `datatable.json`).
 
 **Chart type tự suy ra** từ `chart_data.json`:
 - `donut_stacked` (SA ≤5 / Likert) → donut Total + 100%-stacked breakdown bên phải
@@ -1216,7 +1334,12 @@ output/SURVEY_NAME/
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |
 | "thêm FT coded vào datatable" | Workflow B: thêm `{Q_label}_c{code}` columns vào stub (treat như MA question) |
-| "tạo appendix PPTX / chạy slides" | Workflow D: chọn table "Appendix" → "General" → nếu không có hỏi user tạo; format tự dùng `"default"` (không cần hỏi); nếu table chưa có `appendix_logo` thì hỏi user chọn logo Acecook/khách khác/không dùng trước (xem "Chọn logo khách hàng"); `surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx` |
+| "tạo appendix PPTX / chạy slides" | Workflow D: `--list-groups` để xem MỌI table + trạng thái `is_appendix` hiện tại; nếu chưa table nào đánh dấu → **hỏi user chạy bảng nào + option "All"** (xem "Hỏi user muốn chạy bảng nào") rồi ghi `is_appendix` trước khi chạy; format tự dùng `"default"` (không cần hỏi); nếu table chưa có `appendix_logo` thì hỏi user chọn logo Acecook/khách khác/không dùng trước (xem "Chọn logo khách hàng") |
+| "tạo appendix riêng theo từng brand/nhãn hàng" | Tạo nhiều table item trong `datatable.json`, mỗi item có `"is_appendix": true` + `sub_title` tự do (VD "Hảo Hảo", "Omachi") — appendix tự gộp thành 1 file, mỗi brand 1 group + 1 PowerPoint Section. Nếu cần lọc respondent theo brand cho cả table → dùng field **`"filter"`** cấp table (xem "Filter cấp table") thay vì lọc từng banner column |
+| "đổi bảng nào chạy appendix" | Hỏi lại (xem "Hỏi user muốn chạy bảng nào") → sửa `is_appendix` của các table liên quan (thêm/xoá `true`) trong `datatable.json` |
+| "appendix 1 brand không ra slide nào dù xlsx đủ sheet" | Kiểm tra `chart_data.json` của table đó: nếu `"total": {}` cho mọi câu → table đang lọc Total theo cách cũ (`groups`/`conditions`) mà thiếu `"is_total": true`, hoặc `"filter"` cấp table bị sai `question`/`codes` — xem "Filter cấp table" và "Total có điều kiện" |
+| "chỉ chạy appendix cho 1-2 brand cụ thể, không phải hết (không đổi lưu)" | `surveyflow-pptx ... --tables idx1,idx2` với `table_index` lấy từ `--list-groups` — override 1 lần, không sửa `datatable.json` |
+| "chỉ xuất appendix cho 1 table cụ thể, không group" | `surveyflow-pptx ... --table N` (N = `table_index`) — bỏ qua cơ chế `is_appendix`/group, render đúng 1 table |
 | "appendix theo format general / bỏ style công ty" | Ghi `"appendix_format": "general"` vào table item trong `datatable.json` (xem "Format appendix — default hay general") rồi chạy appendix bình thường — lưu 1 lần, các lần sau tự dùng lại |
 | "đổi appendix về mặc định / bỏ format general" | Xoá field `appendix_format` (hoặc set `"default"`) khỏi table item đó trong `datatable.json` |
 | "dùng logo khách hàng khác cho appendix" | Hỏi user đường dẫn file ảnh logo → ghi đường dẫn đó vào `"appendix_logo"` của table item trong `datatable.json` |

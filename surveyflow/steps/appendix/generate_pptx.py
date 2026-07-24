@@ -23,7 +23,9 @@ Usage (CLI after pip install surveyflow):
 
 Options:
     --templates DIR    Chart-template dir (default: bundled surveyflow/chart_templates)
-    --table N          Export only this table index (default: all)
+    --table N          Export ONLY this table index, ungrouped (default: every
+                        table marked "is_appendix": true, each as its own
+                        group — see _select_tables)
     --start-page N     Starting page number (default: 1)
 """
 
@@ -34,6 +36,7 @@ import copy
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 
 try:
@@ -1743,32 +1746,156 @@ def _safe_print(msg: str) -> None:
         print(msg.encode("ascii", errors="replace").decode("ascii"))
 
 
-def _select_table(tables: list[dict], table_idx: int | None) -> dict:
-    """Pick which chart_data.json table to render into the appendix.
+def _group_name(tbl: dict) -> str:
+    """Display/Section name for an appendix table — its own ``sub_title``
+    verbatim (no more "Appendix - " prefix-stripping: which table renders is
+    now decided purely by the explicit ``is_appendix`` field, so sub_title is
+    free-text with no naming convention attached to it). Falls back to
+    "Table {table_index}" if sub_title is empty, so a group is never
+    unlabeled."""
+    st = str(tbl.get("sub_title") or "").strip()
+    return st or f"Table {tbl.get('table_index', '')}"
 
-    Explicit ``table_idx`` always wins (CLI ``--table N`` override).
-    Otherwise auto-select by ``sub_title`` (case-insensitive): prefer a
-    table named "Appendix", fall back to "General". Raises ValueError if
-    neither exists — appendix generation only ever targets a single table,
-    it never silently renders every table in the file.
+
+def _auto_match_groups(tables: list[dict]) -> list[tuple[dict, str]]:
+    """Every table whose ``is_appendix`` field is true, as
+    ``[(table, group_name), ...]`` in chart_data.json order — see
+    ``_group_name``. Does not raise; callers decide what an empty result
+    means."""
+    return [(tbl, _group_name(tbl)) for tbl in tables if tbl.get("is_appendix")]
+
+
+def list_groups(chart_data_path: str) -> list[dict]:
+    """List EVERY table in chart_data.json — table_index, sub_title, and its
+    current ``is_appendix`` flag — regardless of whether it's marked yet.
+
+    Used two ways (see CLAUDE.md Workflow D):
+      1. Candidate discovery — before anything is marked, a caller (the
+         Claude skill) lists every table here to ask the user which one(s)
+         should become appendix tables, then sets ``"is_appendix": true`` on
+         the chosen table(s) directly in datatable.json (persisted — no
+         need to re-ask on later runs, same pattern as appendix_format/
+         appendix_logo).
+      2. Preview — on a later run, the ``is_appendix`` values already reflect
+         what a plain ``generate()`` call (no ``table_idx``/``table_indices``
+         override) would render, without actually generating a .pptx.
+
+    Returns ``[{"table_index", "sub_title", "is_appendix"}, ...]`` in
+    chart_data.json order (empty list only if chart_data.json has no tables
+    at all).
+    """
+    data = json.loads(Path(chart_data_path).read_text(encoding="utf-8"))
+    return [
+        {
+            "table_index": tbl.get("table_index"),
+            "sub_title":   tbl.get("sub_title", ""),
+            "is_appendix": bool(tbl.get("is_appendix")),
+        }
+        for tbl in data.get("tables", [])
+    ]
+
+
+def _select_tables(tables: list[dict], table_idx: int | None,
+                   table_indices: list[int] | None = None) -> list[tuple[dict, str]]:
+    """Pick which chart_data.json table(s) to render into the appendix, as
+    ``[(table, group_name), ...]`` in chart_data.json order.
+
+    Explicit ``table_idx`` always wins (CLI ``--table N`` override) and
+    bypasses grouping entirely — returns exactly that one table with an empty
+    group name (no PowerPoint Section).
+
+    Otherwise, if ``table_indices`` is given (CLI ``--tables 1,3``), render
+    only those ``table_index`` values — but ONLY among the tables marked
+    ``"is_appendix": true`` (see ``list_groups``); this is how a caller runs
+    a user-picked SUBSET of groups after asking "which table(s)?" (CLAUDE.md
+    Workflow D) rather than either exactly-one (``table_idx``) or all of
+    them. Raises ValueError if any requested index isn't marked. Still
+    grouped into PowerPoint Sections the same way as the "all" case when
+    more than one is picked.
+
+    Otherwise auto-select EVERY table with ``"is_appendix": true`` — see
+    ``_auto_match_groups``. Which tables render is decided ENTIRELY by this
+    explicit field, never by ``sub_title`` naming (no more "Appendix -"/
+    "General" prefix convention). Each matched table is its own group (1
+    table = 1 group; datatable.json already carries one full table config
+    per brand/segment, see CLAUDE.md Workflow D). Raises ValueError if
+    nothing matches — appendix generation never silently renders every
+    table in the file, only the ones opted in.
     """
     if table_idx is not None:
         for tbl in tables:
             if tbl.get("table_index") == table_idx:
-                return tbl
+                return [(tbl, "")]
         raise ValueError(f"No table with table_index={table_idx} in chart_data.json")
 
-    by_sub_title = {str(t.get("sub_title", "")).strip().lower(): t for t in tables}
-    for name in ("appendix", "general"):
-        if name in by_sub_title:
-            return by_sub_title[name]
+    matched = _auto_match_groups(tables)
 
-    available = ", ".join(repr(t.get("sub_title", "")) for t in tables) or "(none)"
-    raise ValueError(
-        "No table named 'Appendix' or 'General' found in chart_data.json "
-        f"(available sub_title values: {available}). Add a table with "
-        "sub_title \"Appendix\" (or \"General\") to datatable.json."
-    )
+    if table_indices is not None:
+        wanted = list(dict.fromkeys(table_indices))  # de-dupe, preserve request order
+        by_idx = {tbl.get("table_index"): (tbl, group) for tbl, group in matched}
+        missing = [i for i in wanted if i not in by_idx]
+        if missing:
+            available = sorted(by_idx)
+            raise ValueError(
+                f"table_indices {missing} not marked \"is_appendix\": true "
+                f"(available table_index values: {available}). Use "
+                "list_groups() / --list-groups to see every table's current "
+                "is_appendix state."
+            )
+        # Keep chart_data.json order among the requested subset, not request order.
+        wanted_set = set(wanted)
+        return [(tbl, group) for tbl, group in matched if tbl.get("table_index") in wanted_set]
+
+    if not matched:
+        available = ", ".join(repr(t.get("sub_title", "")) for t in tables) or "(none)"
+        raise ValueError(
+            "No table marked \"is_appendix\": true found in chart_data.json "
+            f"(available sub_title values: {available}). Add "
+            "\"is_appendix\": true to a table item in datatable.json (see "
+            "CLAUDE.md Workflow D)."
+        )
+    return matched
+
+
+# PowerPoint's native "Sections" feature (Slide Sorter / Outline view) is
+# stored as an undocumented-by-python-pptx but standard OOXML extension:
+# <p:presentation>/<p:extLst>/<p:ext uri="{521415D9-...}">/<p14:sectionLst>.
+# Unknown extensions are spec-required to be ignored gracefully by any
+# reader, so even if some PowerPoint build doesn't render sections from
+# this, the deck still opens and reads fine — the slides themselves are
+# unaffected either way.
+_P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+_SECTION_EXT_URI = "{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"
+
+
+def _add_pptx_sections(prs, sections: list[tuple[str, int, int]]) -> None:
+    """Group slides into native PowerPoint Sections, so a multi-group
+    appendix deck can be jumped between per-group in Slide Sorter/Outline —
+    this is the ONLY grouping cue in the deck. An earlier version also
+    inserted a title-only divider slide before each group, but that cost
+    every group an extra page and was dropped by request — the Section
+    label already carries the group name without spending a slide on it.
+
+    `sections` is ``[(name, first_slide_idx, last_slide_idx), ...]`` — 0-based,
+    inclusive, in slide-add order. Slides are only ever appended (never
+    reordered), so that index order always matches `<p:sldId>` order in the
+    presentation, which is what section membership is keyed on."""
+    sld_ids = [sld_id.get("id") for sld_id in prs._element.sldIdLst]
+
+    ext_lst = prs._element.find(qn("p:extLst"))
+    if ext_lst is None:
+        ext_lst = etree.SubElement(prs._element, qn("p:extLst"))
+    ext = etree.SubElement(ext_lst, qn("p:ext"))
+    ext.set("uri", _SECTION_EXT_URI)
+    section_lst = etree.SubElement(ext, f"{{{_P14_NS}}}sectionLst")
+
+    for name, first_idx, last_idx in sections:
+        section = etree.SubElement(section_lst, f"{{{_P14_NS}}}section")
+        section.set("name", name)
+        section.set("id", "{%s}" % str(uuid.uuid4()).upper())
+        sld_id_lst14 = etree.SubElement(section, f"{{{_P14_NS}}}sldIdLst")
+        for idx in range(first_idx, last_idx + 1):
+            etree.SubElement(sld_id_lst14, f"{{{_P14_NS}}}sldId").set("id", sld_ids[idx])
 
 
 def _chunk_breakdowns_by_col_count(breakdowns: list, max_cols: int) -> list[list]:
@@ -1806,14 +1933,22 @@ def _chunk_breakdowns_by_col_count(breakdowns: list, max_cols: int) -> list[list
 
 def generate(chart_data_path: str, output_path: str, *,
              templates_dir: str | None = None, table_idx: int | None = None,
+             table_indices: list[int] | None = None,
              start_page: int = 1, style: str | None = None,
              default_pptx: str | None = None,
              default_section_label: str | None = None,
              logo: str | None = None) -> None:
     """Generate a PowerPoint appendix from chart_data.json.
 
-    Renders exactly one table (never "all tables merged") — see
-    ``_select_table`` for the selection rule.
+    Renders EVERY table marked ``"is_appendix": true`` as its own group —
+    see ``_select_tables`` for the selection/grouping rule — combined into a
+    single deck. When more
+    than one table matches, the groups are wired up as native PowerPoint
+    Sections (visible/navigable in Slide Sorter and Outline view; see
+    ``_add_pptx_sections``) — no extra divider slide is inserted, only the
+    group's own question slides. A single matching table (the common case)
+    renders exactly as before — no sections either. ``table_idx`` overrides
+    all of this and renders exactly one table, ungrouped.
 
     Args:
         chart_data_path: Path to chart_data.json produced by the pipeline.
@@ -1821,17 +1956,29 @@ def generate(chart_data_path: str, output_path: str, *,
         templates_dir:   Override chart template XML directory (default:
                           bundled — chart_templates/ for "general",
                           chart_templates_default/ for "default").
-        table_idx:       If set, export this table index (0-based) instead of
-                          auto-selecting by sub_title.
-        start_page:      Starting page number shown in slides (default: 1).
+        table_idx:       If set, export ONLY this table index (0-based),
+                          ungrouped, instead of auto-selecting/grouping by
+                          ``is_appendix``. Takes priority over ``table_indices``.
+        table_indices:   If set, render only these ``table_index`` values —
+                          each still its own group (a PowerPoint Section when
+                          more than one) — instead of every table marked
+                          ``"is_appendix": true``. Every value must already be
+                          marked (see ``list_groups``); this is how a caller
+                          renders a user-picked SUBSET of groups after asking
+                          "which table(s)?" (CLAUDE.md Workflow D) rather than
+                          exactly-one or all of them.
+        start_page:      Starting page number shown in slides (default: 1),
+                          continuous across every group.
         style:           "default" (company-branded, the default) or
                           "general" (surveyflow's plain style, kept as an
-                          opt-in override — never auto-selected). If not
-                          given, falls back to the selected table's own
-                          ``appendix_format`` field in chart_data.json (see
-                          CLAUDE.md Workflow D), then "default". The legacy
-                          value "dzung_team" is accepted as an alias for
-                          "default" (old chart_data.json/datatable.json files).
+                          opt-in override — never auto-selected). Applies to
+                          the WHOLE deck (a single .pptx can't mix styles) —
+                          if not given, falls back to the FIRST selected
+                          table's own ``appendix_format`` field in
+                          chart_data.json (see CLAUDE.md Workflow D), then
+                          "default". The legacy value "dzung_team" is
+                          accepted as an alias for "default" (old
+                          chart_data.json/datatable.json files).
         default_pptx:     Override the bundled "default"-format base .pptx
                           (default: bundled).
         default_section_label: Override the "default" format's language-dependent
@@ -1840,31 +1987,47 @@ def generate(chart_data_path: str, output_path: str, *,
                           _default_section_label).
         logo:             Customer logo for the "default" format only — see
                           _default_apply_customer_logo. If not given, falls back to
-                          the selected table's own ``appendix_logo`` field in
+                          the FIRST selected table's own ``appendix_logo`` field in
                           chart_data.json, then "acecook". Ignored when
                           style == "general" (that layout has no logos).
     """
     data = json.loads(Path(chart_data_path).read_text(encoding="utf-8"))
-    tbl = _select_table(data.get("tables", []), table_idx)
-    style = (style or tbl.get("appendix_format") or "default").strip().lower()
+    selected = _select_tables(data.get("tables", []), table_idx, table_indices)
+    first_tbl = selected[0][0]
+
+    style = (style or first_tbl.get("appendix_format") or "default").strip().lower()
     if style == "dzung_team":
         style = "default"
     if style not in ("general", "default"):
         raise ValueError(f"Unknown appendix style '{style}' — expected 'general' or 'default'.")
 
+    # A single deck can only use one visual style — the first selected
+    # table's (or the CLI/API override's) style governs every group. Flag any
+    # other group that explicitly asked for a different one so a mismatch
+    # isn't silently swallowed.
+    for tbl, group_name in selected[1:]:
+        other = str(tbl.get("appendix_format") or "").strip().lower()
+        other = "default" if other == "dzung_team" else other
+        if other and other != style:
+            _safe_print(
+                f"  [warn] group '{group_name}' requests appendix_format="
+                f"{other!r} but the deck-wide style is {style!r} (from the "
+                "first selected table, or --format) — ignoring."
+            )
+
     if style == "default":
-        logo = logo or tbl.get("appendix_logo") or DEFAULT_LOGO
-        _generate_default(tbl, output_path, templates_dir=templates_dir,
+        logo = logo or first_tbl.get("appendix_logo") or DEFAULT_LOGO
+        _generate_default(selected, output_path, templates_dir=templates_dir,
                           start_page=start_page, default_pptx=default_pptx,
                           section_label=default_section_label,
                           lang=data.get("lang", "vi"),
                           logo=logo)
     else:
-        _generate_general(tbl, output_path, templates_dir=templates_dir,
+        _generate_general(selected, output_path, templates_dir=templates_dir,
                           start_page=start_page)
 
 
-def _generate_general(tbl: dict, output_path: str, *,
+def _generate_general(selected: list[tuple[dict, str]], output_path: str, *,
                       templates_dir: str | None, start_page: int) -> None:
     tmpl = _load_templates(templates_dir or _general_templates_dir())
 
@@ -1876,12 +2039,26 @@ def _generate_general(tbl: dict, output_path: str, *,
     def add_slide(q, page, *, title_suffix=""):
         _build_slide(prs, blank_layout, q, page, tmpl, title_suffix=title_suffix)
 
-    page = _emit_slides(tbl, add_slide, start_page)
+    multi = len(selected) > 1
+    page = start_page
+    sections: list[tuple[str, int, int]] = []
+    for tbl, group_name in selected:
+        if multi:
+            _safe_print(f"\n=== Group: {group_name} ===")
+        start_idx = len(prs.slides)
+        page = _emit_slides(tbl, add_slide, page)
+        if multi:
+            sections.append((group_name, start_idx, len(prs.slides) - 1))
+
+    if multi:
+        _add_pptx_sections(prs, sections)
+
     prs.save(output_path)
-    _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides)")
+    suffix = f", {len(selected)} groups" if multi else ""
+    _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides{suffix})")
 
 
-def _generate_default(tbl: dict, output_path: str, *,
+def _generate_default(selected: list[tuple[dict, str]], output_path: str, *,
                       templates_dir: str | None, start_page: int,
                       default_pptx: str | None,
                       section_label: str | None, lang: str = "vi",
@@ -1898,9 +2075,23 @@ def _generate_default(tbl: dict, output_path: str, *,
         _build_slide_default(prs, layout, q, page, tmpl, sldnum_sp, ftr_sp,
                              label, title_suffix=title_suffix)
 
-    page = _emit_slides(tbl, add_slide, start_page)
+    multi = len(selected) > 1
+    page = start_page
+    sections: list[tuple[str, int, int]] = []
+    for tbl, group_name in selected:
+        if multi:
+            _safe_print(f"\n=== Group: {group_name} ===")
+        start_idx = len(prs.slides)
+        page = _emit_slides(tbl, add_slide, page)
+        if multi:
+            sections.append((group_name, start_idx, len(prs.slides) - 1))
+
+    if multi:
+        _add_pptx_sections(prs, sections)
+
     prs.save(output_path)
-    _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides)")
+    suffix = f", {len(selected)} groups" if multi else ""
+    _safe_print(f"\nSaved -> {output_path}  ({page - start_page} slides{suffix})")
 
 
 def _emit_slides(tbl: dict, add_slide, start_page: int) -> int:
@@ -1913,7 +2104,7 @@ def _emit_slides(tbl: dict, add_slide, start_page: int) -> int:
     for q in tbl.get("questions", []):
         if q.get("total", {}).get("base", 0) == 0:
             continue
-        _safe_print(f"  slide {page:>3}: {q.get('question', ''):<12}  {q.get('label', '')}")
+        _safe_print(f"  slide {page:>3}: {q.get('question', ''):<12}  {q.get('title') or q.get('label', '')}")
         chart_type = q.get("chart_type", "bar_vertical")
         breakdowns = q.get("breakdowns", [])
 
@@ -1954,12 +2145,29 @@ def main(argv=None) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("chart_data", help="Path to chart_data.json")
-    ap.add_argument("output", help="Output .pptx path")
+    ap.add_argument("output", nargs="?", default=None,
+                    help="Output .pptx path (omit with --list-groups)")
     ap.add_argument("--templates", default=None,
                     help="Chart-template dir (default: bundled package templates)")
+    ap.add_argument("--list-groups", action="store_true", dest="list_groups",
+                    help="Print every table in chart_data.json as JSON — "
+                         "table_index, sub_title, and its current "
+                         "is_appendix flag — and exit without generating a "
+                         ".pptx. Use this to ask the user which table(s) "
+                         "should be marked \"is_appendix\": true (CLAUDE.md "
+                         "Workflow D), or to preview what a plain run would "
+                         "render, or to pass table_index values to --tables.")
     ap.add_argument("--table", type=int, default=None,
-                    help="Export this table index (default: auto-select by "
-                         "sub_title — 'Appendix', else 'General')")
+                    help="Export ONLY this table index, ungrouped (default: "
+                         "every table marked \"is_appendix\": true, each "
+                         "rendered as its own group). Mutually exclusive "
+                         "with --tables.")
+    ap.add_argument("--tables", default=None,
+                    help="Comma-separated table_index values to render as a "
+                         "SUBSET of the tables marked \"is_appendix\": true "
+                         "(each still its own group — a PowerPoint Section "
+                         "when more than one), e.g. '1,3'. See "
+                         "--list-groups. Mutually exclusive with --table.")
     ap.add_argument("--start-page", type=int, default=1, dest="start_page",
                     help="Starting page number (default: 1)")
     ap.add_argument("--format", choices=("general", "default"), default=None,
@@ -1980,9 +2188,21 @@ def main(argv=None) -> None:
                          "own \"appendix_logo\" field in chart_data.json, then "
                          "'acecook'. Ignored for --format general.")
     args = ap.parse_args(argv)
+
+    if args.list_groups:
+        print(json.dumps(list_groups(args.chart_data), ensure_ascii=False, indent=2))
+        return
+
+    if args.output is None:
+        ap.error("the following arguments are required: output")
+    if args.table is not None and args.tables:
+        ap.error("--table and --tables are mutually exclusive")
+
+    table_indices = [int(x) for x in args.tables.split(",") if x.strip()] if args.tables else None
     generate(args.chart_data, args.output,
              templates_dir=args.templates,
-             table_idx=args.table, start_page=args.start_page,
+             table_idx=args.table, table_indices=table_indices,
+             start_page=args.start_page,
              style=args.format, default_pptx=args.default_pptx,
              default_section_label=args.default_section_label,
              logo=args.logo)

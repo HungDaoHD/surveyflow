@@ -57,10 +57,11 @@ from qme_auth import get_access_token
 # SURVEY_ID   = 716642                  # int  — survey ID từ QMe
 # SURVEY_NAME = "TESTING AREA CODELIST" # str  — tên thư mục output
 
-SURVEY_ID   = 723512               # int  — survey ID từ QMe
-SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
+# SURVEY_ID   = 723512               # int  — survey ID từ QMe
+# SURVEY_NAME = "VN8996 - Ting Ting W4" # str  — tên thư mục output
 
-
+SURVEY_ID   = 723564               # int  — survey ID từ QMe
+SURVEY_NAME = "VN8971 - Acecook DBA" # str  — tên thư mục output
 
 
 # Bật/tắt từng bước
@@ -80,14 +81,14 @@ APPENDIX_FORMAT = "default"   # hoặc "general" / "default"
 # trong template) | "none" (chỉ dùng logo Q&Me, không có logo khách hàng) | đường dẫn tới file
 # ảnh logo của khách hàng khác. None = tự đọc field "appendix_logo" của table trong
 # datatable.json (mặc định "acecook" nếu table không có field này).
-APPENDIX_LOGO = "none"     # "acecook" / "none" / "path/to/logo.png"
+APPENDIX_LOGO = "acecook"     # "acecook" / "none" / "path/to/logo.png"
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
-LANG = "en"           # "vi" = Tiếng Việt | "en" = English
+LANG = "vi"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
-TABLE_VERSION = "V2"   # hoặc đặt cứng, ví dụ: "v2"
+TABLE_VERSION = "V1"   # hoặc đặt cứng, ví dụ: "v2"
 
 # ── Fetch mode ──────────────────────────────────────────────
 # "rows"   = get_survey_definition + get_survey_rows

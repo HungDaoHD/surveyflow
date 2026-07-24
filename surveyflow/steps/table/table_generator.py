@@ -1192,7 +1192,15 @@ def compute_table(
         if not q:
             logger.warning("%s[%d/%d] skipping stub entry with no 'question' key: %s", _pfx, q_idx, total, sc)
             continue
-        logger.info("%s[%d/%d] %s", _pfx, q_idx, total, q)
+        _log_meta  = _get_meta(q) or {}
+        _log_label = (
+            sc.get("title")
+            or sc.get("label")
+            or _i18n(_log_meta.get("question_i18n", {}), lang)
+            or _log_meta.get("label")
+            or q
+        )
+        logger.info("%s[%d/%d] %s — %s", _pfx, q_idx, total, q, _log_label)
 
         # ── sub-question reference: Q14_r10 syntax ────────────────────────────
         sub_ref = _parse_sub_q_ref(q, q_pos_to_meta or {})

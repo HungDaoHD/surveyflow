@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 from surveyflow.core.base import Step
-from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows, _letter
+from surveyflow.steps.table.banner_builder import BannerColumn, build_banner, nest_banner_with_matrix_rows, _letter, eval_filter
 from surveyflow.steps.table.table_generator import StubBlock, StubRow, RowGroupBlock, RankingBlock, compute_table
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,45 @@ def _safe_str(v: Any) -> str:
     if s and s[0] in _FORMULA_TRIGGER:
         return " " + s
     return s
+
+
+_MAX_SHEET_NAME = 31  # Excel's hard limit
+
+
+def _safe_sheet_name(sub_title: str, base_name: str, used: set[str]) -> str:
+    """Build a worksheet title that fits Excel's 31-character limit and is
+    unique within the workbook.
+
+    openpyxl only *warns* ("Title is more than 31 characters …") when you
+    hand it a longer title — it neither truncates nor raises, so the
+    over-length name is written verbatim and the resulting .xlsx can fail to
+    open cleanly in real Excel. `sub_title` is free text (e.g. "Appendix -
+    Hảo Hảo") and easily pushes `"{sub_title} - {base_name}"` past 31 chars,
+    so truncate here instead: keep the short/meaningful `base_name`
+    ("Count"/"Pct"/"Sig") intact and shorten `sub_title`, then append a
+    numeric suffix on collision so two truncated names never silently
+    overwrite each other's sheet."""
+    full = f"{sub_title} - {base_name}" if sub_title else base_name
+    if len(full) <= _MAX_SHEET_NAME:
+        name = full
+    elif sub_title:
+        suffix = f" - {base_name}"
+        budget = _MAX_SHEET_NAME - len(suffix)
+        name = (sub_title[:budget].rstrip() + suffix) if budget > 0 else full[:_MAX_SHEET_NAME]
+    else:
+        name = full[:_MAX_SHEET_NAME]
+
+    if name not in used:
+        used.add(name)
+        return name
+
+    for n in range(2, 1000):
+        tag = f" ({n})"
+        candidate = name[: _MAX_SHEET_NAME - len(tag)].rstrip() + tag
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+    raise ValueError(f"Could not generate a unique <=31-char sheet name for {full!r}")
 
 
 def _set(ws, row, col, val=None, *, font=None, fill=None, align=None,
@@ -544,6 +583,29 @@ class TableStep(Step):
             sub_title = cfg.get("sub_title", "")
             tag       = f"[{cfg_idx}/{len(selected)}] {sub_title or 'config'}"
 
+            # Table-level filter — restricts THIS table's entire respondent
+            # population (every banner column, including a bare Total, AND
+            # every stub cross-tab) to a subset via datatable.json's "filter"
+            # field. Same {"and"/"or"/"question"+"codes"+"op"} schema as
+            # _custom_defs choices (see banner_builder.eval_filter) — nesting
+            # to arbitrary depth and both AND/OR are supported. This is what
+            # lets a per-brand appendix table's "Total" entry stay a plain
+            # {"label": "Total", "filter": null} banner entry (bare Total →
+            # automatically is_total=True, see banner_builder.build_banner)
+            # instead of needing the "groups"/"conditions"+"is_total" workaround
+            # repeated on every single banner column. table_df (not the shared
+            # df) is used for EVERYTHING below in this iteration — banner
+            # masks and stub computation alike — so indices stay aligned; other
+            # table items in the same run are unaffected (df itself is never
+            # mutated).
+            table_filter = cfg.get("filter")
+            if table_filter:
+                table_mask = eval_filter(df, table_filter, q_pos_to_meta, col_map)
+                table_df   = df[table_mask]
+                logger.info("%s — table filter: %d/%d respondents", tag, len(table_df), len(df))
+            else:
+                table_df = df
+
             # Derive sig_config from tables array: union of levels across all enabled sig sheets.
             _sig_levels: set = set()
             _sig_method = "independent"
@@ -559,7 +621,7 @@ class TableStep(Step):
 
             t0 = time.perf_counter()
             logger.info("%s — building banner …", tag)
-            banner_cols = build_banner(cfg, df, col_map=col_map, q_pos_to_meta=q_pos_to_meta,
+            banner_cols = build_banner(cfg, table_df, col_map=col_map, q_pos_to_meta=q_pos_to_meta,
                                        custom_defs=custom_defs)
 
             bm = cfg.get("banner_matrix")
@@ -567,7 +629,7 @@ class TableStep(Step):
                 banner_cols = nest_banner_with_matrix_rows(
                     base_columns    = banner_cols,
                     matrix_question = bm["question"],
-                    df              = df,
+                    df              = table_df,
                     q_pos_to_meta   = q_pos_to_meta,
                     col_map         = col_map,
                     groups          = bm.get("groups"),
@@ -586,7 +648,7 @@ class TableStep(Step):
                     banner_cols = nest_banner_with_matrix_rows(
                         base_columns    = banner_cols,
                         matrix_question = mx_q,
-                        df              = df,
+                        df              = table_df,
                         q_pos_to_meta   = q_pos_to_meta,
                         col_map         = col_map,
                         groups          = cfg.get("matrix_rows"),  # Feature 1: show/hide/combine rows
@@ -620,7 +682,7 @@ class TableStep(Step):
             blocks = compute_table(
                 stub_configs   = cfg.get("stub", []),
                 banner_cols    = banner_cols,
-                df             = df,
+                df             = table_df,
                 metadata       = metadata,
                 sig_config     = sig_config,
                 col_map        = col_map,
@@ -655,6 +717,7 @@ class TableStep(Step):
                 "tables":      item["cfg"].get("tables", []),
                 "appendix_format": item["cfg"].get("appendix_format", "default"),
                 "appendix_logo":   item["cfg"].get("appendix_logo", "acecook"),
+                "is_appendix": bool(item["cfg"].get("is_appendix")),
                 "stub":        item["cfg"].get("stub", []),
             }
             for item in computed
@@ -692,6 +755,7 @@ class TableStep(Step):
 
         wb = Workbook()
         wb.remove(wb.active)
+        used_sheet_names: set[str] = set()
 
         for item in computed:
             cfg         = item["cfg"]
@@ -706,7 +770,7 @@ class TableStep(Step):
                 if not tbl.get("enabled", True):
                     continue
                 base_name  = tbl.get("sheet", "Sheet")
-                sheet_name = f"{sub_title} - {base_name}" if sub_title else base_name
+                sheet_name = _safe_sheet_name(sub_title, base_name, used_sheet_names)
                 t0 = time.perf_counter()
                 logger.info("Writing sheet: %s …", sheet_name)
                 ws = wb.create_sheet(title=sheet_name)

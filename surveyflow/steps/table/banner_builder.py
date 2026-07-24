@@ -56,6 +56,110 @@ def _letter(i: int) -> str:
     return "".join(reversed(letters))
 
 
+# ── Standalone filter/mask primitives ───────────────────────────────────────────
+#
+# Pulled out of build_banner()'s closures (which still delegate to these via
+# thin local wrappers, so every existing call site inside build_banner is
+# unchanged) so TableStep.compute() can also call eval_filter() directly —
+# to evaluate a whole TABLE's "filter" field (datatable.json, restricting
+# that table's entire respondent population, not just one banner column)
+# before build_banner()/compute_table() ever run. Same reason custom_ref
+# choices already used this exact filter schema for a per-column scope.
+
+def get_meta(q_ref: str, q_pos_to_meta: dict | None, col_map: dict | None) -> dict:
+    """Return metadata for a question (empty dict if not found)."""
+    if not q_pos_to_meta:
+        return {}
+    resolved = col_map[q_ref] if col_map and q_ref in col_map else q_ref
+    return q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(resolved) or {}
+
+
+def make_mask(df: pd.DataFrame, q_ref: str, value: int | None, values: list | None,
+              q_pos_to_meta: dict | None = None, col_map: dict | None = None) -> pd.Series:
+    """Build a respondent mask for one condition (banner group or filter leaf).
+
+    Reads rawdata_columns from q_pos_to_meta — no hardcoded column conventions.
+
+    SA / NUM  : single primary column, equality / isin filter.
+    MA binary : per-choice binary columns from rawdata_columns (value == 1).
+    """
+    meta         = get_meta(q_ref, q_pos_to_meta, col_map)
+    atype        = meta.get("answer_type", "SA")
+    rawdata_cols = meta.get("rawdata_columns", [])
+
+    if atype == "MA":
+        col_for_code = _ma_col_map(rawdata_cols)
+        if value is not None:
+            c = col_for_code.get(str(value))
+            if c and c in df.columns:
+                return pd.to_numeric(df[c], errors="coerce").fillna(0) == 1
+            return pd.Series(False, index=df.index)
+        elif values:
+            mask = pd.Series(False, index=df.index)
+            for v in values:
+                c = col_for_code.get(str(v))
+                if c and c in df.columns:
+                    mask = mask | (pd.to_numeric(df[c], errors="coerce").fillna(0) == 1)
+            return mask
+        return pd.Series(False, index=df.index)
+
+    else:  # SA / NUM / etc.
+        resolved = col_map[q_ref] if col_map and q_ref in col_map else q_ref
+        col = rawdata_cols[0] if rawdata_cols else resolved
+        if not col or col not in df.columns:
+            return pd.Series(False, index=df.index)
+        if value is not None:
+            return df[col] == value
+        elif values:
+            return df[col].isin(values)
+        return pd.Series(False, index=df.index)
+
+
+def eval_filter(df: pd.DataFrame, flt: dict | None,
+                q_pos_to_meta: dict | None = None, col_map: dict | None = None) -> pd.Series:
+    """Evaluate a filter expression to a respondent boolean mask. Recursive,
+    arbitrary nesting depth (a filter's own "and"/"or" children can themselves
+    be "and"/"or" filters).
+
+    Supports:
+      {"and": [<filter>, ...]}
+      {"or":  [<filter>, ...]}
+      {"question": Q, "codes": [c, ...], "op": "any"|"all"}
+
+    ``None``/``{}`` returns an all-True mask (no filter) — safe to call
+    unconditionally, e.g. ``eval_filter(df, cfg.get("filter"), ...)``.
+    """
+    if not flt:
+        return pd.Series(True, index=df.index)
+    if "and" in flt:
+        mask = pd.Series(True, index=df.index)
+        for sub in flt["and"]:
+            mask = mask & eval_filter(df, sub, q_pos_to_meta, col_map)
+        return mask
+    if "or" in flt:
+        mask = pd.Series(False, index=df.index)
+        for sub in flt["or"]:
+            mask = mask | eval_filter(df, sub, q_pos_to_meta, col_map)
+        return mask
+    q_ref = flt["question"]
+    codes = [int(c) for c in flt.get("codes", [])]
+    op    = flt.get("op", "any")
+    meta  = get_meta(q_ref, q_pos_to_meta, col_map)
+    if meta.get("answer_type") == "MA" and op == "all":
+        rawdata_cols = meta.get("rawdata_columns", [])
+        col_for_code = _ma_col_map(rawdata_cols)
+        all_mask = pd.Series(True, index=df.index)
+        for c in codes:
+            col = col_for_code.get(str(c))
+            if col and col in df.columns:
+                all_mask = all_mask & (pd.to_numeric(df[col], errors="coerce").fillna(0) == 1)
+            else:
+                return pd.Series(False, index=df.index)
+        return all_mask
+    return make_mask(df, q_ref, value=None, values=codes,
+                     q_pos_to_meta=q_pos_to_meta, col_map=col_map)
+
+
 @dataclass
 class BannerColumn:
     group_label:     str        # e.g. "Q1 x Q2 x Q3" — sig test grouping key
@@ -118,47 +222,11 @@ def build_banner(
 
     def _get_meta(q_ref: str) -> dict:
         """Return metadata for a question (empty dict if not found)."""
-        if not q_pos_to_meta:
-            return {}
-        return q_pos_to_meta.get(q_ref) or q_pos_to_meta.get(_resolve(q_ref)) or {}
+        return get_meta(q_ref, q_pos_to_meta, col_map)
 
     def _make_mask(q_ref: str, value: int | None, values: list | None) -> pd.Series:
-        """Build respondent mask for one banner group.
-
-        Reads rawdata_columns from q_pos_to_meta — no hardcoded column conventions.
-
-        SA / NUM  : single primary column, equality / isin filter.
-        MA binary : per-choice binary columns from rawdata_columns (value == 1).
-        """
-        meta         = _get_meta(q_ref)
-        atype        = meta.get("answer_type", "SA")
-        rawdata_cols = meta.get("rawdata_columns", [])
-
-        if atype == "MA":
-            col_for_code = _ma_col_map(rawdata_cols)
-            if value is not None:
-                c = col_for_code.get(str(value))
-                if c and c in df.columns:
-                    return pd.to_numeric(df[c], errors="coerce").fillna(0) == 1
-                return pd.Series(False, index=df.index)
-            elif values:
-                mask = pd.Series(False, index=df.index)
-                for v in values:
-                    c = col_for_code.get(str(v))
-                    if c and c in df.columns:
-                        mask = mask | (pd.to_numeric(df[c], errors="coerce").fillna(0) == 1)
-                return mask
-            return pd.Series(False, index=df.index)
-
-        else:  # SA / NUM / etc.
-            col = rawdata_cols[0] if rawdata_cols else _resolve(q_ref)
-            if not col or col not in df.columns:
-                return pd.Series(False, index=df.index)
-            if value is not None:
-                return df[col] == value
-            elif values:
-                return df[col].isin(values)
-            return pd.Series(False, index=df.index)
+        """Build respondent mask for one banner group — see module-level make_mask()."""
+        return make_mask(df, q_ref, value, values, q_pos_to_meta, col_map)
 
     def _answered_mask(q_ref: str) -> pd.Series:
         """Return mask of respondents who answered q_ref at all.
@@ -194,39 +262,9 @@ def build_banner(
         return langs.get("en") or langs.get("vi") or next(iter(langs.values()), str(code))
 
     def _eval_filter(flt: dict) -> pd.Series:
-        """Evaluate a filter expression to a respondent boolean mask.
-
-        Supports:
-          {"and": [<filter>, ...]}
-          {"or":  [<filter>, ...]}
-          {"question": Q, "codes": [c, ...], "op": "any"|"all"}
-        """
-        if "and" in flt:
-            mask = pd.Series(True, index=df.index)
-            for sub in flt["and"]:
-                mask = mask & _eval_filter(sub)
-            return mask
-        if "or" in flt:
-            mask = pd.Series(False, index=df.index)
-            for sub in flt["or"]:
-                mask = mask | _eval_filter(sub)
-            return mask
-        q_ref = flt["question"]
-        codes = [int(c) for c in flt.get("codes", [])]
-        op    = flt.get("op", "any")
-        meta  = _get_meta(q_ref)
-        if meta.get("answer_type") == "MA" and op == "all":
-            rawdata_cols = meta.get("rawdata_columns", [])
-            col_for_code = _ma_col_map(rawdata_cols)
-            all_mask = pd.Series(True, index=df.index)
-            for c in codes:
-                col = col_for_code.get(str(c))
-                if col and col in df.columns:
-                    all_mask = all_mask & (pd.to_numeric(df[col], errors="coerce").fillna(0) == 1)
-                else:
-                    return pd.Series(False, index=df.index)
-            return all_mask
-        return _make_mask(q_ref, value=None, values=codes)
+        """Evaluate a filter expression to a respondent boolean mask — see
+        module-level eval_filter() (and/or nesting, any/all op)."""
+        return eval_filter(df, flt, q_pos_to_meta, col_map)
 
     def _expand_with_levels(entry: dict, group_label: str) -> list[BannerColumn]:
         """Handle banner entries with ``levels`` (multi-level nesting) or ``show_total``.
@@ -495,6 +533,12 @@ def build_banner(
         # Supports:
         #   - Single-question banner:  entry has "question" + groups with value/values
         #   - Manual cross-tab:        groups have "conditions" + optional "subgroup"/"subgroup2"
+        #   - Filtered Total:          exactly one group opts in with "is_total": true
+        #     (e.g. per-brand appendix tables where "Total" itself must be scoped to
+        #     that brand's respondents via a "conditions" filter — the bare-entry
+        #     Total path above can't express a filter, it's always the full/
+        #     unconditional dataset, so this is the only way to get a real is_total
+        #     column when Total itself needs a condition)
         letter_idx  = 0
         prev_outer: str | None = None
 
@@ -531,7 +575,7 @@ def build_banner(
                 subgroup_label=grp["label"],
                 letter=_letter(letter_idx),
                 mask=mask,
-                is_total=False,
+                is_total=bool(grp.get("is_total")),
                 level_labels=level_labels,
             ))
             letter_idx += 1

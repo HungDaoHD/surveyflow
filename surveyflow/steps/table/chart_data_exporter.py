@@ -450,6 +450,7 @@ def export_chart_data(
             "sub_title":       tr.get("sub_title", ""),
             "appendix_format": tr.get("appendix_format", "default"),
             "appendix_logo":   tr.get("appendix_logo", "acecook"),
+            "is_appendix":     bool(tr.get("is_appendix")),
             "questions":       questions_out,
         })
 

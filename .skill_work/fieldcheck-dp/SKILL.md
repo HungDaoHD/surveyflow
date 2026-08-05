@@ -104,10 +104,12 @@ Note the `survey_id`. If multiple results → show list, ask user to confirm.
 → Hỏi: *"Data đã có sẵn. Dùng data cũ hay lấy lại?"*
 
 **Nếu chưa có data** → Hỏi user:
-> *"Bạn muốn **fetch từ QMe** hay **upload file zip** từ Fieldcheck?"*
+> *"Bạn muốn **fetch từ QMe**, **upload file zip** từ Fieldcheck, hay **upload file Excel**
+> "Question"+"Data" 2-sheet?"*
 
 - **Fetch từ QMe** → Step 2A
 - **Upload zip** → Step 2B
+- **Upload xlsx "Question"+"Data"** → Step 2C
 
 > ⚠️ Fetch rules: `format="code"` always · Never use `get_survey_rows` · Write tool for JSON/CSV · `data_export.csv` encoding=`utf-8-sig`
 
@@ -145,6 +147,30 @@ with open('output/SURVEY_NAME/mcp/data_export.csv', 'w', encoding='utf-8-sig') a
 ```
 
 > Nếu `definition.json` chưa có: fetch bằng `get_survey_definition(survey_id)` trước.
+
+**Step 2C — Upload xlsx "Question"+"Data":**
+
+Khi user đính kèm 1 file `.xlsx` gồm đúng 2 sheet **"Question"** (danh sách câu hỏi dạng
+phẳng) và **"Data"** (khớp định dạng `data_export.csv` chuẩn — header có ô đầu `"Approve"`)
+→ dùng thẳng `--xlsx-input`, **không tự viết converter riêng**:
+
+```bash
+python run_pipeline.py \
+  --xlsx-input "SURVEY_NAME.xlsx" \
+  --mcp-dir    output/SURVEY_NAME/mcp \
+  --output-dir output/SURVEY_NAME \
+  --version    v1
+```
+
+surveyflow (`surveyflow/steps/ingestion/flat_xlsx_import.py`) tự convert sang
+`definition.json` + `data_export.csv`, tự suy luận SA/MA/FT/RANKING/Matrix_SA/multiplenumber,
+tự loại field interviewer-only và field ảnh (label kết thúc `_PHOTO`). **Luôn đọc phần
+`WARNING` in ra console** sau khi chạy — liệt kê mọi cột bị skip/giả định, cần kiểm tra lại
+nếu survey có cấu trúc khác biệt lớn (converter mới verify với SA/MA/FT/RANKING/Matrix_SA/
+multiplenumber — chưa gặp Matrix_MA, NUM, hay synthetic type gender/area/personal-income).
+
+> Sau ingestion vẫn cần chạy Step 3a/3b/3c như bình thường (title_i18n, scale_class,
+> mean/factor/T2B/NPS) — converter chỉ tạo đúng structure, không tự phân loại/tóm tắt.
 
 ---
 
@@ -701,6 +727,7 @@ Top 3 = Rank 1/2/3 riêng (donut, mutually exclusive). Overall (`any_rank`) = % 
 | "brand làm header" | Add `banner_matrix: { question: "QX" }` |
 | "bảng matrix horizontal" | Add `"matrix_orientation": "horizontal"` |
 | "refresh data / lấy data mới" | Re-fetch → re-run with `--force-ingestion` |
+| Đính kèm file `.xlsx` có 2 sheet "Question"+"Data" | Dùng `--xlsx-input` (Step 2C) — không tự viết converter |
 | "tạo PPTX / appendix" | Step 6: `--list-groups` xem table nào khớp; 1 table → chạy thẳng; ≥2 → hỏi "chạy bảng nào" + option "All"; format tự dùng `"default"` (không hỏi); nếu chưa có `appendix_logo` hỏi logo Acecook/khác/none trước; `surveyflow-pptx ...` |
 | "chỉ chạy appendix cho 1-2 brand cụ thể" | Sau khi hỏi (trên), `surveyflow-pptx ... --tables idx1,idx2` (idx từ `--list-groups`) |
 | "tạo appendix riêng theo từng brand/nhãn hàng" | Nhiều table item, mỗi item `"is_appendix": true` + `sub_title` tự do; lọc respondent theo brand cho cả table → field `"filter"` cấp table (xem "Filter cấp table" ở Banner rules) |

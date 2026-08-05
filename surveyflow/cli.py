@@ -40,6 +40,15 @@ Usage — force re-ingestion::
         --output-dir      output/VN8947     \\
         --version         v3                \\
         --force-ingestion
+
+Usage — flat "Question"+"Data" xlsx input (alternative source format, see
+surveyflow.steps.ingestion.flat_xlsx_import for the grouping heuristics)::
+
+    surveyflow-run \\
+        --xlsx-input      "VN9013 - Lighting product.xlsx" \\
+        --mcp-dir         output/VN9013/mcp \\
+        --output-dir      output/VN9013                    \\
+        --version         v1
 """
 from __future__ import annotations
 
@@ -121,6 +130,15 @@ def main(argv: list[str] | None = None) -> None:
              "If omitted, old mode (rows_page_*.json) is used.",
     )
     parser.add_argument(
+        "--xlsx-input",
+        default=None,
+        help="Path to a flat 'Question'+'Data' 2-sheet .xlsx (alternative "
+             "source format — see surveyflow.steps.ingestion.flat_xlsx_import). "
+             "Converts it into definition.json + data_export.csv under "
+             "--mcp-dir, then proceeds like --export-csv mode. Any warnings "
+             "from the heuristic converter are printed — always review them.",
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         help="Base output folder (data/, datatable/, vX/ are created inside)",
@@ -196,6 +214,18 @@ def main(argv: list[str] | None = None) -> None:
                    else f"(data not found at {data_dir} or --force-ingestion was set)")
             )
         mcp_dir = Path(args.mcp_dir)
+
+        if args.xlsx_input:
+            from surveyflow.steps.ingestion.flat_xlsx_import import convert_xlsx_to_mcp
+            result_x = convert_xlsx_to_mcp(Path(args.xlsx_input), mcp_dir)
+            logging.info(
+                "Converted %s -> %s + %s (%d warning(s))",
+                args.xlsx_input, result_x["definition_path"],
+                result_x["data_export_path"], len(result_x["warnings"]),
+            )
+            for w in result_x["warnings"]:
+                logging.warning("  %s", w)
+            args.export_csv = args.export_csv or result_x["data_export_path"]
 
         if args.metadata_only:
             # metadata-only: only need definition.json, no export CSV

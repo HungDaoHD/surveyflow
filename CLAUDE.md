@@ -101,6 +101,41 @@ read_survey_data_file(job_id, file="data", offset=500,  limit=500)
 > ```
 > Dùng `BASE` làm gốc cho **tất cả** các path trong cùng session.
 
+### Step 2b — Input thay thế: file Excel "Question"+"Data" 2-sheet
+
+Một số survey không có sẵn `definition.json` (MCP) mà chỉ có 1 file `.xlsx` gồm đúng 2
+sheet **"Question"** (danh sách câu hỏi dạng phẳng — mỗi dòng là 1 câu hoặc 1 sub-item:
+choice/matrix row/rank-pool item) và **"Data"** (khớp định dạng `data_export.csv` chuẩn
+QMe — dòng header có ô đầu là `"Approve"`). Khi user đính kèm file dạng này, dùng thẳng
+`--xlsx-input` — surveyflow tự convert sang `definition.json` + `data_export.csv` rồi chạy
+ingestion bình thường, **không cần Claude tự viết converter riêng nữa**:
+
+```bash
+python run_pipeline.py \
+  --xlsx-input "SURVEY_NAME.xlsx" \
+  --mcp-dir    output/SURVEY_NAME/mcp \
+  --output-dir output/SURVEY_NAME \
+  --version    v1
+```
+
+Converter (`surveyflow/steps/ingestion/flat_xlsx_import.py`) tự suy luận SA/MA/FT/RANKING/
+Matrix_SA/multiplenumber từ cấu trúc cột thật trong sheet Data (xem docstring module để biết
+đầy đủ heuristic), tự loại các field interviewer-only (`[Interviewer...`/`DO NOT ask`) và
+field ảnh (label kết thúc `_PHOTO`). **Luôn đọc phần `WARNING` in ra console sau khi chạy** —
+đây là danh sách mọi cột bị skip/giả định (VD nhóm bị gộp thành 1 cột nhưng suy luận là
+multiplenumber) để kiểm tra lại, đặc biệt với survey có cấu trúc câu hỏi khác biệt lớn so với
+những gì converter đã từng gặp (mới verify với `SA`/`MA`/`FT`/`RANKING`/`Matrix_SA`/
+`multiplenumber` — chưa gặp `Matrix_MA`, `NUM`, hay các synthetic type như gender/area/
+personal-income).
+
+> ⚠️ Nếu ô nào trong sheet Data có xuống dòng (Alt+Enter), converter tự thay bằng khoảng
+> trắng khi dump ra CSV — cần thiết vì `export_parser.parse_export_csv` tách dòng theo
+> newline vật lý, xuống dòng trong ô sẽ làm vỡ cấu trúc cột nếu không xử lý.
+
+> Sau khi ingestion xong, **vẫn cần chạy Step 3a/3b/3c như bình thường** (title_i18n,
+> scale_class, mean/factor/T2B/NPS) — converter chỉ tạo `definition.json`/`metadata.json`
+> đúng structure, không tự phân loại Ordinal/Nominal hay tóm tắt tiêu đề.
+
 ### Step 3 — Run ingestion (generate rawdata + metadata)
 
 **Check if `output/SURVEY_NAME/data/rawdata.csv` already exists.**
@@ -1330,6 +1365,7 @@ output/SURVEY_NAME/
 | "ẩn brand X khỏi bảng horizontal" | Xoá row_code đó ra khỏi `matrix_rows` (hoặc không liệt kê nó) |
 | "compare demographics within each brand" | Thêm `"sig_direction": "columns"` vào table item |
 | "refresh data / lấy data mới" | Re-fetch (prepare→poll→read) → overwrite `mcp/data_export.csv` → re-run với `--export-csv` + `--force-ingestion` |
+| Đính kèm file `.xlsx` có 2 sheet "Question"+"Data" | Dùng `--xlsx-input` (xem Step 2b) — surveyflow tự convert sang definition.json + data_export.csv, không cần tự viết converter |
 | "code câu FT / open-ended" | Workflow C: identify FT → tạo codelist → classify → ghi `ft_coded.csv` |
 | "tạo codelist cho Q5" | Workflow C Step 2: sample responses Q5 → đề xuất codelist → user confirm → save `ft_codelist_Q5.json` |
 | "user cung cấp codelist" | Workflow C Step 2: dùng codelist của user, không tự generate |

@@ -113,8 +113,14 @@ def _translate_condition_node(
     answer_id_to_code: dict[int, tuple[str, int]],
     row_answer_id_to_info: dict[int, tuple[str, str]],
     q_ids_with_answer_ids: "set[str] | None" = None,
+    owner_label: str = "?",
 ) -> "dict | list | None":
     """Recursively translate a show_condition / contradiction rule node.
+
+    ``owner_label`` is the label of the question that OWNS this
+    show_condition/contradiction rule (not the question referenced inside
+    the rule) — threaded through purely so error messages can point at the
+    question whose rule is broken.
 
     Supported id formats
     --------------------
@@ -138,7 +144,7 @@ def _translate_condition_node(
     if isinstance(node, list):
         return [
             _translate_condition_node(
-                r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids
+                r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids, owner_label
             )
             for r in node
         ]
@@ -148,7 +154,7 @@ def _translate_condition_node(
             "condition": node["condition"],
             "rules": [
                 _translate_condition_node(
-                    r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids
+                    r, id_to_label, answer_id_to_code, row_answer_id_to_info, q_ids_with_answer_ids, owner_label
                 )
                 for r in node.get("rules", [])
             ],
@@ -169,8 +175,9 @@ def _translate_condition_node(
         q_label = id_to_label.get(q_id_part)
         if q_label is None:
             raise ValueError(
-                f"show_condition/contradiction rule: question_id '{q_id_part}' "
-                "(from compound id '{q_id_str}') not found in survey definition"
+                f"show_condition/contradiction rule of question '{owner_label}': "
+                f"question_id '{q_id_part}' (from compound id '{q_id_str}') "
+                "not found in survey definition"
             )
         row_info = row_answer_id_to_info.get(int(row_aid_str))
         if row_info is None:
@@ -210,6 +217,7 @@ def _translate_condition_node(
                     info = answer_id_to_code.get(int(aid))
                     if info is None:
                         raise ValueError(
+                            f"show_condition/contradiction rule of question '{owner_label}': "
                             f"column answer_id {aid} (matrix '{sub_q_label}') "
                             "not found in any choice"
                         )
@@ -219,6 +227,7 @@ def _translate_condition_node(
                 info = answer_id_to_code.get(int(raw_value))
                 if info is None:
                     raise ValueError(
+                        f"show_condition/contradiction rule of question '{owner_label}': "
                         f"column answer_id {raw_value} (matrix '{sub_q_label}') "
                         "not found in any choice"
                     )
@@ -231,8 +240,8 @@ def _translate_condition_node(
     q_label = id_to_label.get(q_id_str)
     if q_label is None:
         raise ValueError(
-            f"show_condition/contradiction rule: question_id '{q_id_str}' "
-            "not found in survey definition"
+            f"show_condition/contradiction rule of question '{owner_label}': "
+            f"question_id '{q_id_str}' not found in survey definition"
         )
 
     translated = {
@@ -254,7 +263,8 @@ def _translate_condition_node(
                     info = answer_id_to_code.get(vi)
                     if info is None:
                         raise ValueError(
-                            f"answer_id {aid} (question '{q_label}') not found in any choice"
+                            f"show_condition/contradiction rule of question '{owner_label}': "
+                            f"answer_id {aid} (referenced question '{q_label}') not found in any choice"
                         )
                     codes.append(info[1])
                 else:
@@ -266,7 +276,8 @@ def _translate_condition_node(
                 info = answer_id_to_code.get(vi)
                 if info is None:
                     raise ValueError(
-                        f"answer_id {raw_value} (question '{q_label}') not found in any choice"
+                        f"show_condition/contradiction rule of question '{owner_label}': "
+                        f"answer_id {raw_value} (referenced question '{q_label}') not found in any choice"
                     )
                 translated["codes"] = [info[1]]
             else:
@@ -549,16 +560,17 @@ def parse_metadata(definition: dict) -> dict:
         # ── show_condition + contradiction_settings (translated) ───────────
         raw_sc = q.get("show_condition")
         raw_cs = q.get("contradiction_settings")
+        _owner_label = q.get("label") or col
         if raw_sc:
             q_entry["show_condition"] = _translate_condition_node(
-                raw_sc, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids
+                raw_sc, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids, _owner_label
             )
         if raw_cs:
             raw_rules = raw_cs.get("rules")
             q_entry["contradiction_settings"] = {
                 "action": raw_cs.get("action"),
                 "rules":  _translate_condition_node(
-                    raw_rules, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids
+                    raw_rules, _id_to_label, _answer_id_to_code, _row_aid_to_info, _q_ids_with_aids, _owner_label
                 ) if raw_rules else None,
             }
 

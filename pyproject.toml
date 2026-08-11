@@ -1,10 +1,14 @@
 [build-system]
-requires = ["hatchling"]
+# Pinned below 1.30 — 1.30+ emits Metadata-Version 2.5, which the packaging
+# library used by twine (as installed at release time) does not yet recognize,
+# causing `twine upload` to fail with "InvalidDistribution: '2.5' is not a
+# valid metadata version". Bump this once twine/packaging support 2.5.
+requires = ["hatchling>=1.25,<1.30"]
 build-backend = "hatchling.build"
 
 [project]
 name = "surveyflow"
-version = "0.7.5"
+version = "0.7.6"
 description = "Survey data pipeline: rawdata.csv + metadata.json + datatable.xlsx with sig testing"
 readme = "README.md"
 requires-python = ">=3.8"

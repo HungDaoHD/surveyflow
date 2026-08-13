@@ -33,8 +33,6 @@ chạy quality check VN8966
 
 Nếu user không nói tên survey → hỏi ngay: *"Bạn muốn chạy survey nào?"*
 
-Nếu user nói **"hướng dẫn / help / giải thích"** → đọc `docs/USER_GUIDE.md` và present cho user.
-
 ---
 
 ## Environment check (once per session)
@@ -428,16 +426,17 @@ Tiêu đề bảng? (Enter để dùng mặc định: "SURVEY_NAME - Data Table"
 
 Tạo `output/SURVEY_NAME/datatable/datatable.json` với **default tables: Count + Pct** (không có Sig — xem Tables rules).
 
-**Helper scripts** (dùng khi cần tra cứu choice codes; đường dẫn tương đối `.skill_work/fieldcheck-dp/scripts/`):
+**Helper script** — `group_numeric.py` (chỉ dùng cho câu `NUM`, khi cần xem trước bin trước khi
+chốt cách group). Banner/stub choice codes thì đọc thẳng `metadata.json`, không có script riêng:
 ```bash
-python .skill_work/fieldcheck-dp/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type banner
-python .skill_work/fieldcheck-dp/scripts/list_questions.py output/SURVEY_NAME/data/metadata.json --type stub
-python .skill_work/fieldcheck-dp/scripts/check_choices.py  output/SURVEY_NAME/data/metadata.json --question Q10
-python .skill_work/fieldcheck-dp/scripts/group_numeric.py  output/SURVEY_NAME/data/rawdata.csv output/SURVEY_NAME/data/metadata.json --question S3_1
+python scripts/group_numeric.py output/SURVEY_NAME/data/rawdata.csv output/SURVEY_NAME/data/metadata.json --question S3_1
 ```
-`group_numeric.py` (câu NUM): đề xuất range/bucket tự động từ phân bố giá trị thật (bin width
-"đẹp" — 1/2/5/10/20/25/50/100 × 10^n), in sẵn `"choices"` (group + hidden) để paste vào stub.
-Dùng `--width N` để ép width cụ thể thay vì để script tự chọn, `--bins N` để đổi số bin mục tiêu.
+> `scripts/` = tương đối với thư mục skill. Khi làm việc trong repo surveyflow, path đầy đủ là
+> `.skill_work/fieldcheck-dp/scripts/group_numeric.py`.
+Đề xuất range/bucket từ phân bố giá trị thật (bin width "đẹp" — 1/2/5/10/20/25/50/100 × 10^n),
+in sẵn `"choices"` (group + hidden) để paste vào stub. Flag: `--width N` ép width cụ thể ·
+`--bins N` đổi số bin mục tiêu (mặc định 6) · `--quantile N` chuyển sang bin ~bằng nhau về số
+respondent, khớp đúng những gì `"num_quantile": N` sinh ra lúc chạy table (dùng để chọn N).
 
 ---
 

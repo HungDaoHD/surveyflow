@@ -44,6 +44,11 @@ python -c "import surveyflow; print(surveyflow.__version__)"
 
 For local dev: `pip install -e . --no-deps --break-system-packages -q`
 
+> ⚠️ **Lệnh chạy pipeline trong skill này luôn là `surveyflow-run`** (console script do
+> `pip install surveyflow` tạo ra). Chỉ khi làm việc **bên trong repo surveyflow** mới thay được
+> bằng `python run_pipeline.py` — file đó không tồn tại ở máy user cài qua pip.
+> Tương tự: appendix dùng `surveyflow-pptx`.
+
 ---
 
 ## Output folder structure
@@ -120,7 +125,8 @@ prepare_survey_data_file(survey_id, format="code", force_refresh=False)
   → job_id
 
 get_survey_data_file_status(job_id)   ← poll every retry_after_seconds until status=="ready"
-  → If stuck after 3+ polls: stop → tell user to export zip manually → switch to Step 2B
+  → Kẹt sau 10 lần poll: dừng → báo user → hỏi chuyển sang Step 2B (export zip thủ công)
+    hay Step 2C (file xlsx "Question"+"Data")
 
 read_survey_data_file(job_id, offset=0,   limit=500)
 read_survey_data_file(job_id, offset=500, limit=500)
@@ -153,7 +159,7 @@ phẳng) và **"Data"** (khớp định dạng `data_export.csv` chuẩn — hea
 → dùng thẳng `--xlsx-input`, **không tự viết converter riêng**:
 
 ```bash
-python run_pipeline.py \
+surveyflow-run \
   --xlsx-input "SURVEY_NAME.xlsx" \
   --mcp-dir    output/SURVEY_NAME/mcp \
   --output-dir output/SURVEY_NAME \
@@ -175,7 +181,7 @@ multiplenumber — chưa gặp Matrix_MA, NUM, hay synthetic type gender/area/pe
 ### Step 3 — Run ingestion
 
 ```bash
-python run_pipeline.py \
+surveyflow-run \
   --mcp-dir    output/SURVEY_NAME/mcp \
   --export-csv output/SURVEY_NAME/mcp/data_export.csv \
   --output-dir output/SURVEY_NAME
@@ -195,7 +201,7 @@ After ingestion, tell user:
 **Chỉ chạy quality check khi user xác nhận.**
 
 Sau đó (không cần đợi quality check) → luôn chạy **Step 3a — Tóm tắt title_i18n** và
-**Step 3c — Phân loại câu SA/Matrix_SA** trước khi sang Step 4 (thứ tự giữa 3a/3c không quan
+**Step 3b — Phân loại câu SA/Matrix_SA** trước khi sang Step 4 (thứ tự giữa 3a/3b không quan
 trọng, độc lập nhau).
 
 ---
@@ -205,7 +211,7 @@ trọng, độc lập nhau).
 `parse_metadata()` (code) đã tự ghi field **`title_i18n: null`** vào mọi câu hỏi trong
 `metadata.json` (và mọi entry trong `sub_questions` của câu matrix) — code không tự tóm tắt được,
 chỉ Claude mới điền nội dung thật. **Bỏ qua bước này nếu mọi câu đã có `title_i18n` khác `null`**
-(idempotent, chỉ chạy 1 lần sau ingestion, giống Step 3c với `scale_class`).
+(idempotent, chỉ chạy 1 lần sau ingestion, giống Step 3b với `scale_class`).
 
 1. Đọc `question_i18n` (`vi` + `en`) từng câu.
 2. Viết tiêu đề ngắn gọn (5-10 từ), giữ đúng ý, bỏ phần kỹ thuật/lặp ("(Multiple answers
@@ -227,12 +233,12 @@ sau này tự có tiêu đề tóm tắt, không cần set `"title"` thủ công
 
 ---
 
-### Step 3b — Quality check (user confirms)
+### Quality check — tuỳ chọn (user confirms)
 
 Chạy khi user đồng ý, hoặc khi user nói: *"chạy quality", "kiểm tra data", "check lỗi routing"*.
 
 ```bash
-python run_pipeline.py --output-dir output/SURVEY_NAME --run-quality
+surveyflow-run --output-dir output/SURVEY_NAME --run-quality
 ```
 
 Read `quality/quality_report.json` và present:
@@ -263,11 +269,11 @@ Sau đó hỏi: *"Bạn muốn xem chi tiết câu nào, hay tiếp tục chạy
 
 ---
 
-### Step 3c — Phân loại câu SA VÀ Matrix_SA (Ordinal / Nominal)
+### Step 3b — Phân loại câu SA VÀ Matrix_SA (Ordinal / Nominal)
 
 > ⚠️ **Quét CẢ `SA` lẫn `Matrix_SA` — lỗi thực tế đã xảy ra**: lọc cứng `answer_type == "SA"`
 > sẽ bỏ sót toàn bộ Matrix_SA (VD Q17/Q15/Q11/Q6_A-kiểu-câu), khiến chúng không bao giờ có
-> `scale_class` → không bao giờ tự thêm mean/T2B/NPS ở Step 3d. Matrix_SA phải ghi
+> `scale_class` → không bao giờ tự thêm mean/T2B/NPS ở Step 3c. Matrix_SA phải ghi
 > `scale_class` vào **CẢ entry cha lẫn từng entry trong `sub_questions`** (chỉ ghi entry cha
 > không đủ — appendix PPTX khớp theo mã sub-question như `A4_r1`, không phải mã câu cha).
 
@@ -288,7 +294,7 @@ dùng khả năng đọc hiểu ngữ cảnh, **không phải rule cố định 
 > code lớn = điểm cao. Một số thang (đặc biệt **tần suất**) đánh số ngược: code 1 = mức cao nhất
 > ("Hầu như mỗi ngày"), code lớn nhất = thấp nhất ("Ít hơn 1 lần/tháng"). Khi phân loại 1 câu là
 > `Ordinal` mà **code nhỏ nhất là đầu "cao nhất"** của thang → ghi thêm field **`scale_high_code`** =
-> code đầu cao đó (VD `1`). Step 3d dùng field này để tính mirror factor + nhóm NPS đúng chiều; thiếu
+> code đầu cao đó (VD `1`). Step 3c dùng field này để tính mirror factor + nhóm NPS đúng chiều; thiếu
 > nó → mean/T2B/NPS sai chiều. **Bỏ qua** field này nếu code lớn nhất đã là đầu "cao nhất" (trường
 > hợp thường gặp — satisfaction/agreement/purchase intent). Matrix_SA: ghi vào **cả entry cha lẫn
 > từng `sub_questions`**, giống `scale_class`.
@@ -338,18 +344,17 @@ Nếu user đổi loại một câu ("đổi Q10 thành Nominal") → sửa `sca
 
 ---
 
-### Step 3d — Detect Ordinal (tự động thêm stats/factor/group codes)
+### Step 3c — Detect Ordinal (tự động thêm stats/factor/group codes)
 
 Khi thêm câu `scale_class: "Ordinal"` vào `stub` (Step 4), tự động bổ sung thêm — không cần
 user yêu cầu riêng (bỏ qua meta code 98/99 trong mọi phép tính):
 
 1. **Mọi câu Ordinal → thêm `"mean"` vào `stats` + LUÔN thêm `"factor"` cho từng choice**
-   (bắt buộc — thiếu factor dù chỉ 1 code sẽ khiến pipeline âm thầm trả mean=0.0, không có
-   fallback tính trên code gốc). Không đảo ngược → `factor(code) = code` (identity). Đảo
-   ngược (`scale_high_code` = code nhỏ nhất) → `factor(code) = code_max + code_min - code`.
-   **Chỉ 1 format được hỗ trợ:** per-choice `"choices": [{"code":.., "factor":..}]` — KHÔNG
-   có top-level `"factors"`/`"mean_factor"` (đã bị bỏ hẳn khỏi pipeline) hay `"factor"` số ít
-   (chưa từng được hỗ trợ) — cả 2 đều dẫn tới mean âm thầm = 0.0, đã xảy ra thực tế 2 lần.
+   (bắt buộc — không có fallback tính trên code gốc). Không đảo ngược → `factor(code) = code`
+   (identity). Đảo ngược (`scale_high_code` = code nhỏ nhất) → `factor(code) = code_max +
+   code_min - code`. **Chỉ 1 format được hỗ trợ:** per-choice `"choices": [{"code":.., "factor":..}]`
+   — KHÔNG có top-level `"factors"`/`"mean_factor"` (đã bị bỏ hẳn khỏi pipeline) hay `"factor"`
+   số ít (chưa từng được hỗ trợ) — cả 2 đều dẫn tới mean = 0.0, đã xảy ra thực tế 2 lần.
    Matrix_SA: code lấy từ `choices_i18n.columns`, **KHÔNG BAO GIỜ** từ `.rows` (rows = item
    được đánh giá như brand, không phải thang đo) — cũng là bug thực tế đã xảy ra.
 
@@ -370,16 +375,30 @@ user yêu cầu riêng (bỏ qua meta code 98/99 trong mọi phép tính):
    ```
    2 code gần đầu "cao nhất" theo `scale_high_code` → T2B; 2 code gần đầu "thấp nhất" → B2B.
    `stats` chỉ cần có `"percent"` — group tự render kèm theo.
-3. **Thang 1–10 hoặc 0–10** → thêm `"nps"` vào `stats` + `choices` groups:
+3. **Thang 1–10 hoặc 0–10** → thêm `"nps"` vào `stats` + 3 group vào `choices`. Group **KHÔNG
+   thay thế** entry factor per-choice của mục 1 — phải có **cả hai** trong cùng mảng `choices`,
+   factor trước, group sau:
    ```json
+   "stats": ["base", "percent", "mean", "nps"],
    "choices": [
+     { "code": 0,  "factor": 0  }, { "code": 1, "factor": 1 }, { "code": 2,  "factor": 2  },
+     { "code": 3,  "factor": 3  }, { "code": 4, "factor": 4 }, { "code": 5,  "factor": 5  },
+     { "code": 6,  "factor": 6  }, { "code": 7, "factor": 7 }, { "code": 8,  "factor": 8  },
+     { "code": 9,  "factor": 9  }, { "code": 10, "factor": 10 },
      { "type": "promoters",  "codes": [9, 10],              "label": "Promoters" },
      { "type": "passive",    "codes": [7, 8],                "label": "Passives" },
      { "type": "detractors", "codes": [0, 1, 2, 3, 4, 5, 6], "label": "Detractors" }
    ]
    ```
-   (thang 1–10 không có code 0 → Detractors bỏ code 0.) Đảo ngược → nhóm theo khoảng cách
-   tới `scale_high_code`, không theo trị số tuyệt đối.
+   (thang 1–10 không có code 0 → bỏ cả entry factor lẫn code 0 trong Detractors.) Đảo ngược →
+   nhóm theo khoảng cách tới `scale_high_code`, không theo trị số tuyệt đối.
+
+> ⚠️ **Factor phải phủ HẾT mọi code thật của thang đo.** Thiếu **toàn bộ** factor → pipeline log
+> warning `stat 'mean' requested but no factor could be resolved` rồi trả mean = 0.0. Nguy hiểm
+> hơn: thiếu **một phần** (VD chỉ khai factor cho 9-10 vì đã có group Promoters) → respondent
+> chọn code không có factor bị **loại khỏi phép tính mean hoàn toàn, không warning nào** — mean
+> vẫn ra số đẹp nhưng sai, base vẫn đủ. Kiểm tra: số entry `{"code":..,"factor":..}` phải bằng
+> số code thật trong `choices_i18n` (trừ 98/99).
 
 Thang đo khác 1–5 và 1–10/0–10 → chỉ thêm `"mean"` (mục 1).
 
@@ -394,35 +413,38 @@ tương đương `"combine"`.
 
 **Nếu user đã chỉ định yêu cầu** → tạo `datatable/datatable.json` trực tiếp, sang Step 4b.
 
-**Nếu chưa chỉ định** → hỏi tuần tự 3 câu (chờ user trả lời xong mỗi câu mới hỏi câu tiếp):
+**Nếu chưa chỉ định** → hỏi **MỘT LẦN DUY NHẤT**, gộp tất cả vào 1 message. KHÔNG hỏi tuần tự
+từng câu rồi chờ trả lời — banner / stub / title / ngôn ngữ độc lập nhau, hỏi tách ra chỉ tốn
+thêm 3-4 lượt qua lại vô ích. Đọc `metadata.json` **trước**, rồi in đúng 1 block như sau (đã
+gồm cả Step 4b — ngôn ngữ, nên sau bước này đi thẳng tới Step 5):
 
-**Câu 1 — Banner:**
-Đọc `metadata.json`, liệt kê các câu SA/MA (thường là câu demographics):
 ```
-Banner gồm những câu nào? (Total luôn có sẵn)
-Ví dụ: S3 (Gender), S5 (Age), S7 (Income)
-Nhập số câu cách nhau bằng dấu phẩy:
-```
-→ Lấy choice codes từ `metadata.json` để tạo `groups`.
+📋 Cấu hình bảng — SURVEY_NAME
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1️⃣ BANNER (Total luôn có sẵn) — các câu SA/MA dùng được:
+   S3 (Gender) · S5 (Age) · S7 (Income) · Q2 (Brand) ...
+   → Nhập tên câu, cách nhau bằng dấu phẩy:
 
-**Câu 2 — Stub:**
-Liệt kê tất cả câu SA/MA/Matrix từ `metadata.json`:
-```
-Stub gồm những câu nào?
-- Nhập "all" để lấy tất cả
-- Hoặc nhập số câu: Q1, Q5, Q8...
-```
-→ Câu SA **hoặc Matrix_SA** có `scale_class: "Ordinal"` trong `metadata.json` → xem **Step 3d**
-  để tự động thêm `"mean"` + **factor** (bắt buộc, mọi choice) + group T2B/B2B trong `choices`
-  cho thang 1-5, `"nps"` cho thang 1-10/0-10 — không cần user yêu cầu riêng. Câu Nominal hoặc
-  chưa có `scale_class` thì giữ mặc định `["base", "percent"]`.
-→ Câu `NUM` → LUÔN tự động thêm `"mean"` + `"num_quantile": 4`, không cần hỏi.
-→ Câu `multiplenumber` → LUÔN tự động thêm `"mean"`, không cần hỏi.
+2️⃣ STUB — "all" để lấy tất cả, hoặc liệt kê: Q1, Q5, Q8...
+   (có {N} câu codeable: {n_sa} SA · {n_ma} MA · {n_matrix} Matrix · {n_num} NUM)
 
-**Câu 3 — Title:**
+3️⃣ TIÊU ĐỀ — Enter để dùng "SURVEY_NAME - Data Table"
+
+4️⃣ NGÔN NGỮ — survey có {langs}        ← BỎ DÒNG NÀY nếu chỉ có 1 ngôn ngữ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Trả lời gộp 1 lần cũng được, VD: "banner S3, S5 · stub all · title mặc định · vi"
 ```
-Tiêu đề bảng? (Enter để dùng mặc định: "SURVEY_NAME - Data Table")
-```
+
+Chỉ hỏi lại nếu user trả lời thiếu mục nào đó. Nếu survey chỉ có 1 ngôn ngữ → bỏ hẳn mục 4️⃣,
+dùng luôn ngôn ngữ đó (xem Step 4b).
+
+**Quy tắc dựng stub từ câu trả lời** (áp dụng tự động, không hỏi thêm):
+- Câu SA **hoặc Matrix_SA** có `scale_class: "Ordinal"` → xem **Step 3c**: thêm `"mean"` +
+  **factor** (bắt buộc, mọi choice) + group T2B/B2B cho thang 1-5, `"nps"` cho thang 1-10/0-10.
+  Câu Nominal hoặc chưa có `scale_class` → giữ `["base", "percent"]`.
+- Câu `NUM` → LUÔN thêm `"mean"` + `"num_quantile": 4`.
+- Câu `multiplenumber` → LUÔN thêm `"mean"`.
+- Câu `ranking` → tách 2 stub entry (Top 3 + Overall), xem mục `ranking` ở Stub rules.
 
 Tạo `output/SURVEY_NAME/datatable/datatable.json` với **default tables: Count + Pct** (không có Sig — xem Tables rules).
 
@@ -442,28 +464,28 @@ respondent, khớp đúng những gì `"num_quantile": N` sinh ra lúc chạy ta
 
 ### Step 4b — Language check
 
-Trước khi chạy pipeline, kiểm tra metadata.json xem survey có mấy ngôn ngữ:
+Chạy **trước** khi in block hỏi ở Step 4, để biết có cần hỏi ngôn ngữ hay không:
 
 ```python
 import json
-with open('output/SURVEY_NAME/data/metadata.json') as f:
+with open('output/SURVEY_NAME/data/metadata.json', encoding='utf-8') as f:
     meta = json.load(f)
 # metadata.json KHÔNG có key "languages" — suy ra từ keys của question_i18n
 langs = sorted({k for q in meta['questions'].values() for k in q.get('question_i18n', {})})
 print('Languages:', langs)
 ```
 
-- **1 ngôn ngữ** → dùng luôn, không hỏi user (ví dụ: `--lang vi`)
-- **Nhiều ngôn ngữ** → hỏi:
-  > *"Survey có {langs}. Bạn muốn output ngôn ngữ nào?"*
-  → User chọn → dùng `--lang {choice}` khi chạy Step 5
+- **1 ngôn ngữ** → dùng luôn, **bỏ mục 4️⃣ khỏi block hỏi** ở Step 4 (ví dụ: `--lang vi`)
+- **Nhiều ngôn ngữ** → giữ mục 4️⃣ trong block hỏi, dùng `--lang {choice}` khi chạy Step 5
+
+> Không hỏi ngôn ngữ thành 1 lượt riêng — nó là mục 4️⃣ của block Step 4.
 
 ---
 
 ### Step 5 — Run pipeline
 
 ```bash
-python run_pipeline.py \
+surveyflow-run \
   --output-dir output/SURVEY_NAME \
   --version    v1 \
   --lang       vi
@@ -471,7 +493,7 @@ python run_pipeline.py \
 
 Force re-ingestion after new fetch:
 ```bash
-python run_pipeline.py \
+surveyflow-run \
   --mcp-dir         output/SURVEY_NAME/mcp \
   --export-csv      output/SURVEY_NAME/mcp/data_export.csv \
   --output-dir      output/SURVEY_NAME \
@@ -480,7 +502,24 @@ python run_pipeline.py \
   --force-ingestion
 ```
 
-> ⚠️ NEVER recreate or rewrite `run_pipeline.py`.
+> 🔥 **`--force-ingestion` sinh lại `metadata.json` + `rawdata.csv` từ đầu → XOÁ SẠCH mọi thứ
+> Claude đã ghi vào 2 file đó.** Mất hết:
+> - `title_i18n` (Step 3a) và `scale_class`/`scale_high_code` (Step 3b) → về `null`/không tồn tại
+> - Cột `{Q}_coded_*` trong `rawdata.csv` và câu FT giả trong `metadata.json` (FT-4/FT-5) → **mất
+>   hẳn, không khôi phục được** trừ khi code lại từ đầu
+>
+> **Luôn confirm với user trước khi chạy** (destructive action, xem "Confirm before acting").
+> Sau khi chạy xong: **bắt buộc làm lại Step 3a + Step 3b**, và nếu survey đã code FT thì phải
+> chạy lại FT-4 → FT-7. Chỉ dùng `--force-ingestion` khi data nguồn thật sự đổi (fetch mới,
+> upload file mới) — sửa `datatable.json` thì KHÔNG bao giờ cần nó (xem Workflow B).
+
+> ⚠️ NEVER recreate or rewrite the `surveyflow-run` entry point (hay `run_pipeline.py` khi ở trong repo).
+
+> ⚠️ **`--profile-status` phải GIỐNG NHAU ở mọi version của cùng 1 survey.** Mặc định là
+> `approved`; thêm `--profile-status approved,pending` sẽ kéo thêm respondent chưa duyệt vào
+> base. Đổi giá trị này giữa v1 và v2 → base khác nhau, hai file **không so sánh được với nhau**
+> mà không có dấu hiệu gì trên bảng. Chỉ đổi khi user yêu cầu rõ, và khi đổi thì **báo user là
+> base sẽ lệch so với các version trước**. Áp dụng cho cả FT-7.
 
 After pipeline:
 ```
@@ -519,7 +558,7 @@ gộp thành **1 file .pptx**.
 
 ```bash
 # Kèm pipeline:
-python run_pipeline.py --output-dir output/SURVEY_NAME --version vX --lang vi --appendix
+surveyflow-run --output-dir output/SURVEY_NAME --version vX --lang vi --appendix
 
 # Riêng (sau khi đã có chart_data.json):
 surveyflow-pptx output/SURVEY_NAME/vX/chart_data.json output/SURVEY_NAME/vX/slides.pptx
@@ -662,11 +701,11 @@ Advanced: `_custom_defs` + `custom_ref`, `banner_matrix`, `levels` — thêm khi
   (cần giữ nguyên văn để tra soát). Chỉ ghi khi **user tự tay** cho giá trị cụ thể.
 - `stats`: `"base"`, `"percent"`, `"nps"`, `"mean"`, `"std"`, `"se"` — **không còn `"t2b"`/`"b2b"`**,
   2 stat này đã bỏ, thay bằng group entry `{"label":"T2B"/"B2B","codes":[..],"type":"combine"}`
-  trong `choices` (tự render cùng `"percent"`, xem Step 3d mục 2)
+  trong `choices` (tự render cùng `"percent"`, xem Step 3c mục 2)
 - `"title"` (mặc định `null`) trên mỗi stub entry — tiêu đề slide appendix tuỳ chỉnh; nếu để
   `null`, `chart_data.json` tự fallback sang `title_i18n` của câu đó trong `metadata.json` (Step 3a)
 - Types: `SA`, `MA`, `Matrix_SA`, `Matrix_MA`, `Matrix_NUM`, `NUM`, `multiplenumber`
-- SA với `scale_class: "Ordinal"` (metadata.json, xem Step 3c/3d) → tự động thêm
+- SA với `scale_class: "Ordinal"` (metadata.json, xem Step 3b/3c) → tự động thêm
   `"mean"`/group T2B-B2B/`"nps"` tuỳ range thang đo
 - `NUM` (câu số đơn): `"percent"` tự sinh 1 row/giá trị số, sort giảm dần (lớn→nhỏ). **Mặc định LUÔN
   áp dụng khi thêm câu NUM vào stub** — không cần hỏi/xác nhận trước: thêm `"mean"` vào `stats` +
@@ -725,7 +764,7 @@ Top 3 = Rank 1/2/3 riêng (donut, mutually exclusive). Overall (`any_rank`) = % 
 | "nhóm Q13/Q14/Q17 theo brand" | Use `row_group: true` |
 | "brand làm header" | Add `banner_matrix: { question: "QX" }` |
 | "bảng matrix horizontal" | Add `"matrix_orientation": "horizontal"` |
-| "refresh data / lấy data mới" | Re-fetch → re-run with `--force-ingestion` |
+| "refresh data / lấy data mới" | Re-fetch → confirm với user → re-run `--force-ingestion` → **làm lại Step 3a + 3b** (và FT-4→FT-7 nếu đã code FT) — xem cảnh báo ở Step 5 |
 | Đính kèm file `.xlsx` có 2 sheet "Question"+"Data" | Dùng `--xlsx-input` (Step 2C) — không tự viết converter |
 | "tạo PPTX / appendix" | Step 6: `--list-groups` xem table nào khớp; 1 table → chạy thẳng; ≥2 → hỏi "chạy bảng nào" + option "All"; format tự dùng `"default"` (không hỏi); nếu chưa có `appendix_logo` hỏi logo Acecook/khác/none trước; `surveyflow-pptx ...` |
 | "chỉ chạy appendix cho 1-2 brand cụ thể" | Sau khi hỏi (trên), `surveyflow-pptx ... --tables idx1,idx2` (idx từ `--list-groups`) |
@@ -735,18 +774,18 @@ Top 3 = Rank 1/2/3 riêng (donut, mutually exclusive). Overall (`any_rank`) = % 
 | "appendix format general / bỏ branding" | Ghi `"appendix_format": "general"` vào table item trong `datatable.json` |
 | "dùng logo khách khác / không logo Q&Me" | Ghi đường dẫn ảnh vào `"appendix_logo"`, hoặc `"none"` (chỉ Q&Me), hoặc bỏ field = Acecook mặc định |
 | "rút gọn tiêu đề slide / label dài quá" | Đề xuất tóm tắt ngắn → user xác nhận → ghi vào `"title"` của stub entry |
-| "chạy quality check" | Step 3b: `--run-quality`, present summary |
+| "chạy quality check" | Quality check: `--run-quality`, present summary |
 | "sao title_i18n toàn null" | Bình thường nếu chạy pipeline thẳng không qua Claude — chỉ Claude mới điền được (Step 3a) |
 | "tóm tắt lại title_i18n" | Step 3a: đọc `question_i18n`, ghi đè `title_i18n` cho từng câu (+ sub_questions matrix) |
 | "export tiếng Anh" | Re-run with `--lang en` |
 | "include pending profiles" | Add `--profile-status approved,pending` |
 | "đổi sang tiếng Anh" | Re-run pipeline với `--lang en` |
-| "phân loại câu SA Ordinal/Nominal" | Step 3c: đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class`, báo summary |
+| "phân loại câu SA Ordinal/Nominal" | Step 3b: đọc metadata.json, tự phân loại từng câu SA **và Matrix_SA**, ghi field `scale_class`, báo summary |
 | "câu này sao không tự thêm mean" | Kiểm tra `scale_class` của câu đó — chỉ Ordinal mới tự thêm `"mean"` |
 | "đổi Q10 thành Nominal/Ordinal" | Sửa `scale_class` của Q10 trong metadata.json, ghi đè file |
-| "sao câu Ordinal này không có T2B/NPS" | Step 3d: kiểm tra range code — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
-| "thang đo bị đảo (không phải tần suất), mean tính sai" | Step 3d: kiểm tra `scale_high_code`, thêm `factor` theo công thức mirror |
-| "câu tần suất sao không tự có mean" | Đúng — cố ý không tự thêm, phải hỏi user trước (xem ngoại lệ Step 3d) |
+| "sao câu Ordinal này không có T2B/NPS" | Step 3c: kiểm tra range code — chỉ 1-5 tự thêm T2B/B2B, chỉ 1-10/0-10 tự thêm NPS |
+| "thang đo bị đảo (không phải tần suất), mean tính sai" | Step 3c: kiểm tra `scale_high_code`, thêm `factor` theo công thức mirror |
+| "câu tần suất sao không tự có mean" | Đúng — cố ý không tự thêm, phải hỏi user trước (xem ngoại lệ Step 3c) |
 | "tự nhập/ignore factor cho câu tần suất" | Nhập → dùng giá trị đó, giữ Ordinal. Ignore → sửa `scale_class` thành `"Nominal"` |
 | "thêm câu ranking / gộp slide ranking" | Tách 2 stub entries: Top 3 (`ranking_mode: "rank_dist", ranking_top_n: 3`) + Overall (`ranking_mode: "any_rank"`) |
 
@@ -883,7 +922,12 @@ from surveyflow.cli import main
 import os, re as _re
 existing = [d for d in os.listdir(f'output/{SURVEY}') if _re.match(r'^v\d+$', d)]
 next_v = f"v{max([int(d[1:]) for d in existing], default=0) + 1}"
-main(['--output-dir', f'output/{SURVEY}', '--profile-status', 'approved,pending', '--version', next_v])
+
+# PROFILE_STATUS phải giống hệt các version trước của survey này -- xem Step 5.
+# Mặc định là approved; chỉ đổi khi user yêu cầu rõ.
+PROFILE_STATUS = 'approved'
+main(['--output-dir', f'output/{SURVEY}',
+      '--profile-status', PROFILE_STATUS, '--version', next_v])
 ```
 
 **Fix % formatting nếu cần** (nếu thấy `0.082` thay vì `8%` trong sheet Pct):
@@ -923,7 +967,7 @@ Khi gặp lỗi, luôn:
 |---|---|---|
 | `FileNotFoundError: rawdata.csv` | Ingestion chưa chạy | Chạy lại Step 3 |
 | `KeyError: 'Q5'` | Question label sai trong datatable.json | Kiểm tra `metadata.json` |
-| Output có 0 rows | `profile_status` filter quá hẹp | Thêm `--profile-status approved,pending` |
+| Output có 0 rows | `profile_status` filter quá hẹp | Thêm `--profile-status approved,pending` — **báo user base sẽ lệch so với version trước** |
 | `ModuleNotFoundError: surveyflow` | Package chưa install | `pip install surveyflow` |
 | `PermissionError: datatable.xlsx` | File đang mở trong Excel | Đóng Excel trước khi chạy |
 | `ValueError: No data_export.csv` | Fetch chưa hoàn thành | Fetch lại hoặc upload zip |
@@ -939,6 +983,8 @@ Khi gặp lỗi, luôn:
 | Fetch + ingestion lần đầu | Chạy thẳng — không confirm |
 | User yêu cầu sửa `datatable.json` | Confirm: *"Tôi sẽ [thay đổi]. OK không?"* |
 | Fetch lại data mới (overwrite) | Confirm — destructive action |
+| Chạy `--force-ingestion` | Confirm — **destructive**: xoá `title_i18n` + `scale_class` + cột FT coded. Nói rõ sẽ phải làm lại Step 3a/3b (xem cảnh báo ở Step 5) |
+| Đổi `--profile-status` khác các version trước | Confirm — base sẽ lệch, 2 version không so sánh được (xem Step 5) |
 | Increment version | Thông báo: *"Tôi sẽ tạo v2 — v1 vẫn giữ nguyên"* |
 
 - `"yes / ok / xác nhận / làm đi / chạy đi"` → proceed

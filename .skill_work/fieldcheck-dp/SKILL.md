@@ -6,8 +6,11 @@ description: >
   building a datatable, or working with surveyflow — even if they don't say "surveyflow"
   explicitly. Triggers on phrases like "chạy survey", "tạo datatable", "thêm banner",
   "bỏ câu khỏi stub", "fetch data từ QMe", "chạy pipeline", "chạy bảng", etc.
-  Always use this skill for any QMe survey data task — it contains the authoritative
-  workflow guide that governs all fetch, ingestion, and table steps.
+  This skill is the authoritative workflow guide for the data-processing
+  pipeline: fetch, ingestion, quality check, table/datatable, and appendix
+  slides. It does NOT cover writing client-facing key summary or key
+  findings decks from a proposal — if the user asks for key summary, key
+  slides, or a findings deck built from a proposal, do not use this skill.
 ---
 
 # SurveyFlow Skill

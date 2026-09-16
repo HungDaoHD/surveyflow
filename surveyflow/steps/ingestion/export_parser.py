@@ -271,6 +271,9 @@ def convert_export_to_rawdata(
     rename_map: dict[str, str] = {}
     if "ID"   in df.columns: rename_map["ID"]   = "task_id"
     if "Date" in df.columns: rename_map["Date"] = "date_time"
+    if '"Login ID"' in df.columns: rename_map['"Login ID"'] = "login_id"
+    if '"Task duration"' in df.columns: rename_map['"Task duration"'] = "task_duration"
+
     df = df.rename(columns=rename_map)
 
     # Filter out rejected rows
@@ -304,7 +307,7 @@ def convert_export_to_rawdata(
 
     # System columns must never be matched as question columns.
     # Define them first so the col_to_lbl loop can skip them explicitly.
-    SYSTEM_KEEP = ["task_id", "profile_status", "date_time", "Task duration"]
+    SYSTEM_KEEP = ["task_id", "profile_status", "login_id", "date_time", "task_duration"]
     _system_set = set(SYSTEM_KEEP)
 
     # Longest-label-wins: each export column → best matching question label.
@@ -382,13 +385,18 @@ _SYSTEM_ENTRIES: dict[str, dict] = {
         "answer_type": "system",
         "question_i18n": {"en": "Profile Status", "vi": "Trạng thái"},
     },
+    "login_id": {
+        "label": "login_id",
+        "answer_type": "system",
+        "question_i18n": {"en": "Login ID", "vi": "Login ID"},
+    },
     "date_time": {
         "label": "date_time",
         "answer_type": "system",
         "question_i18n": {"en": "Date Time", "vi": "Ngày giờ"},
     },
-    "Task duration": {
-        "label": "Task duration",
+    "task_duration": {
+        "label": "task_duration",
         "answer_type": "system",
         "question_i18n": {"en": "Task Duration", "vi": "Thời lượng"},
     },

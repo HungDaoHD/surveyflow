@@ -223,6 +223,7 @@ def main():
 
     if RUN_QUALITY:
         cli_argv += ["--run-quality"]
+
     cli_argv += ["--lang", LANG]
 
     if has_table:

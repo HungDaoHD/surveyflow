@@ -64,6 +64,7 @@ class IngestionStep(Step):
 
         definition = context["definition"]
         export_df  = context["export_df"]
+        
         if not isinstance(export_df, _pd.DataFrame):
             raise TypeError(
                 f"export_df must be a pd.DataFrame, got {type(export_df).__name__}. "

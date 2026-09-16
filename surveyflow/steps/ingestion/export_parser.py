@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 PERSONAL_COLS: set[str] = {
     "Panel ID", "Panel FB", "Panel Email", "Panel Phone",
     "Panel Age", "Panel Gender", "Panel Area", "Panel Income",
-    "Login ID", "User name", "IP address (Public user)",
+    "User name", "IP address (Public user)",
     "Contact person", "Email", "Telephone number", "Manager",
     "Others 1", "Others 2", "Others 3", "Others 4",
     "User Latitude", "User Longitude",

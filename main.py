@@ -63,14 +63,19 @@ from qme_auth import get_access_token
 SURVEY_ID   = 723564               # int  — survey ID từ QMe
 SURVEY_NAME = "VN8971 - Acecook DBA" # str  — tên thư mục output
 
+# SURVEY_ID   = 723815               # int  — survey ID từ QMe
+# SURVEY_NAME = "VN9041 - VN Forecast - OWNERS" # str  — tên thư mục output
+
+# SURVEY_ID   = 723812               # int  — survey ID từ QMe
+# SURVEY_NAME = "VN9041 - VN Forecast - CAR INTENDERS" # str  — tên thư mục output
 
 # Bật/tắt từng bước
-FETCH_MCP     = False  # True  = fetch lại data từ QMe (ghi đè mcp/)
-FORCE_REFRESH = False  # True  = bỏ qua cache TTL của MCP, luôn tạo export job mới (chỉ áp dụng khi FETCH_MODE = "export")
-RUN_INGEST   = False  # True  = chạy lại ingestion (ghi đè data/)
+FETCH_MCP     = True  # True  = fetch lại data từ QMe (ghi đè mcp/)
+FORCE_REFRESH = True  # True  = bỏ qua cache TTL của MCP, luôn tạo export job mới (chỉ áp dụng khi FETCH_MODE = "export")
+RUN_INGEST   = True  # True  = chạy lại ingestion (ghi đè data/)
 RUN_QUALITY  = False  # True  = chạy quality check → quality/quality_report.json
-RUN_TABLE    = True   # True  = chạy table → datatable.xlsx
-GENERATE_PPTX = True  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
+RUN_TABLE    = False   # True  = chạy table → datatable.xlsx
+GENERATE_PPTX = False  # True  = generate slides.pptx từ chart_data.json (sau khi chạy table)
 
 # Format appendix: "default" (mặc định, style công ty) | "general" (style mặc định của surveyflow)
 # None = tự đọc field "appendix_format" của table trong datatable.json (mặc định "default"
@@ -84,7 +89,7 @@ APPENDIX_FORMAT = "default"   # hoặc "general" / "default"
 APPENDIX_LOGO = "acecook"     # "acecook" / "none" / "path/to/logo.png"
 
 # Ngôn ngữ hiển thị label trong datatable.xlsx
-LANG = "vi"           # "vi" = Tiếng Việt | "en" = English
+LANG = "en"           # "vi" = Tiếng Việt | "en" = English
 
 # Version cho table (None = tự tăng: v1 → v2 → v3 …)
 # TABLE_VERSION = None   # hoặc đặt cứng, ví dụ: "v2"
@@ -212,11 +217,14 @@ def main():
                 "--profile-status", "approved,pending"]
     if not skip_ingestion:
         cli_argv += ["--mcp-dir", str(mcp_dir), "--force-ingestion"]
+
         if FETCH_MODE == "export":
             cli_argv += ["--export-csv", str(mcp_dir / "data_export.csv")]
+
     if RUN_QUALITY:
         cli_argv += ["--run-quality"]
     cli_argv += ["--lang", LANG]
+
     if has_table:
         cli_argv += ["--datatable-config", str(datatable_cfg)]
 
